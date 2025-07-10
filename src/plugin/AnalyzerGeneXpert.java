@@ -1,19 +1,47 @@
 package plugin;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Date;
+import java.util.List;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import ca.uhn.hl7v2.HL7Exception;
 import ca.uhn.hl7v2.parser.PipeParser;
+import ca.uhn.hl7v2.model.Group;
 import ca.uhn.hl7v2.model.Message;
+import ca.uhn.hl7v2.model.Structure;
+import ca.uhn.hl7v2.model.v251.datatype.CX;
+import ca.uhn.hl7v2.model.v251.datatype.ID;
+import ca.uhn.hl7v2.model.v251.datatype.IS;
+import ca.uhn.hl7v2.model.v251.datatype.ST;
+import ca.uhn.hl7v2.model.v251.datatype.TS;
+import ca.uhn.hl7v2.model.v251.datatype.XAD;
+import ca.uhn.hl7v2.model.v251.datatype.XPN;
+import ca.uhn.hl7v2.model.v251.datatype.XTN;
+import ca.uhn.hl7v2.model.v251.group.OML_O33_SPECIMEN;
 import ca.uhn.hl7v2.model.v251.message.OML_O33;
+import ca.uhn.hl7v2.model.v251.message.QBP_Q11;
+import ca.uhn.hl7v2.model.v251.segment.MSH;
+import ca.uhn.hl7v2.model.v251.segment.NTE;
+import ca.uhn.hl7v2.model.v251.segment.OBR;
+import ca.uhn.hl7v2.model.v251.segment.OBX;
+import ca.uhn.hl7v2.model.v251.segment.ORC;
+import ca.uhn.hl7v2.model.v251.segment.PID;
+import ca.uhn.hl7v2.model.v251.segment.QPD;
+import ca.uhn.hl7v2.model.v251.segment.RCP;
+import ca.uhn.hl7v2.model.v251.segment.SPM;
+import ca.uhn.hl7v2.model.v251.message.ACK;
 
 /**
  * Implementation of the Analyzer interface specific for GeneXpert analyzers.
@@ -24,6 +52,8 @@ import ca.uhn.hl7v2.model.v251.message.OML_O33;
 public class AnalyzerGeneXpert implements Analyzer {
 	
 	private static final Logger logger = LoggerFactory.getLogger(AnalyzerGeneXpert.class); // Uses Connect's logback.xml
+	
+	private final String jar_version = "0.9.2";
 
     // === General Configuration ===
     protected String version = "";
@@ -45,9 +75,17 @@ public class AnalyzerGeneXpert implements Analyzer {
     private Socket socket;
     private InputStream inputStream;
     private OutputStream outputStream;
-    private String expectedResponse = null;
-    private final Object responseLock = new Object();
-    private boolean waitingForResponse = false;
+    
+    // ASTM control characters
+    private static final byte ENQ = 0x05;
+    private static final byte ACK = 0x06;
+    private static final byte NAK = 0x15;
+    private static final byte EOT = 0x04;
+    private static final byte STX = 0x02;
+    private static final byte ETX = 0x03;
+    private static final byte CR = 0x0D;
+    private static final byte LF = 0x0A;
+
     
     /**
      * Default constructor.
@@ -154,8 +192,8 @@ public class AnalyzerGeneXpert implements Analyzer {
     @Override
     public String info() {
         return String.format(
-            "Analyzer Info: [Version=%s, ID=%s, Lab27=%s, Lab29=%s, TypeCnx=%s, TypeMsg=%s, ArchiveMsg=%s, OperationMode=%s, Mode=%s, IP=%s, Port=%d]",
-            this.version, this.id_analyzer, this.url_upstream_lab27, this.url_upstream_lab29,
+            "Analyzer Info: [Jar=%s Version=%s, Version=%s, ID=%s, Lab27=%s, Lab29=%s, TypeCnx=%s, TypeMsg=%s, ArchiveMsg=%s, OperationMode=%s, Mode=%s, IP=%s, Port=%d]",
+            this.jar_version, this.version, this.id_analyzer, this.url_upstream_lab27, this.url_upstream_lab29,
             this.type_cnx, this.type_msg, this.archive_msg, this.operation_mode, this.mode, this.ip_analyzer, this.port_analyzer
         );
     }
@@ -169,109 +207,587 @@ public class AnalyzerGeneXpert implements Analyzer {
 
     @Override
     public String lab27(final String msg) {
-        return processLabTransaction(msg, "LAB-27", this.url_upstream_lab27);
-    }
-
-    @Override
-    public String lab28(final String str_OML_O33) {
-        logger.info("Lab28 GeneXpert : Received message\n" + str_OML_O33);
+        logger.info("Lab27 GeneXpert : Received ASTM query message\n" + msg);
 
         try {
-            Connect_util.archiveMessage(this.getId_analyzer(), this.archive_msg, str_OML_O33, "LAB-28", "LIS");
+            Connect_util.archiveMessage(this.getId_analyzer(), this.archive_msg, msg, "LAB-27", "Analyzer");
+
+            // Parse ASTM message into lines
+            String[] astmLines = msg.replaceAll("[\\u000d\\u000a]+", "\n").split("\n");
+            for (String l : astmLines) {
+                logger.info("ASTM line: " + l);
+            }
+
+            // Convert ASTM query to HL7 QBP^Q11
+            String qbpMsg = convertASTMQueryToQBP_Q11(astmLines);
+            if (qbpMsg == null) {
+                logger.error("Lab27 GeneXpert : Failed to convert ASTM to HL7 QBP^Q11");
+                return null;
+            }
+
+            logger.info("Lab27 GeneXpert : Converted HL7 QBP^Q11\n" + qbpMsg.replace("\r", "\n"));
+
+            // Send QBP^Q11 to LabBook
+            String rspMsg = Connect_util.send_hl7_msg(this, this.url_upstream_lab27, qbpMsg);
+            logger.info("Lab27 GeneXpert : Received RSP^K11 from LabBook\n" + rspMsg.replace("\r", "\n"));
+
+            // Convert RSP^K11 back to ASTM message for GeneXpert
+            String[] astmResponse = convertRSP_K11toASTM(rspMsg);
+            if (astmResponse == null || astmResponse.length == 0) {
+                logger.error("Lab27 GeneXpert : Failed to convert RSP^K11 to ASTM response");
+                return null;
+            }
+
+            return String.join("\r", astmResponse);  // Send back ASTM response
+
+        } catch (Exception e) {
+            logger.error("Lab27 GeneXpert : Unexpected error: " + e.getMessage(), e);
+            return null;
+        }
+    }
+    
+    @Override
+    public String lab28(final String str_OML_O33) {
+        logger.info("Lab28 GeneXpert : Received message\n" + str_OML_O33.replace("\r", "\r\n"));
+
+        try {
+            Connect_util.archiveMessage(this.getId_analyzer(), this.archive_msg, str_OML_O33.replace("\r", "\r\n"), "LAB-28", "LIS");
 
             PipeParser parser = new PipeParser();
             OML_O33 omlMessage = (OML_O33) parser.parse(str_OML_O33);
 
-            if (omlMessage.getSPECIMENReps() == 0) {
-                logger.error("Lab28 GeneXpert Error: No SPECIMEN segment found in the OML^O33 message.");
-                return "Error: No SPECIMEN segment found.";
+            // Log and check number of SPECIMEN groups
+            int specimenCount = omlMessage.getSPECIMENReps();
+            logger.info("Lab28 GeneXpert : Number of SPECIMEN groups = {}", specimenCount);
+
+            if (specimenCount == 0) {
+                logger.error("Lab28 GeneXpert : Error - No SPECIMEN group found in the message");
+                return "ERROR Lab28 GeneXpert : No SPECIMEN group found.";
             }
 
-            String formattedHL7 = parser.encode(omlMessage);
-            logger.info("Lab28 GeneXpert Formatted HL7 message:\n" + formattedHL7.replace("\r", "\n"));
+            // Get first SPECIMEN group
+            OML_O33_SPECIMEN specimenGroup = omlMessage.getSPECIMEN();
 
-            return sendHL7MessageToAnalyzer(formattedHL7);
+            // Log and check number of ORDER groups in SPECIMEN
+            int orderCount = specimenGroup.getORDERReps();
+            logger.info("Lab28 GeneXpert : Number of ORDER groups in SPECIMEN = {}", orderCount);
+
+            if (orderCount == 0) {
+                logger.error("Lab28 GeneXpert : Error - No ORDER group found in SPECIMEN");
+                return "ERROR Lab28 GeneXpert : No ORDER group found.";
+            }
+
+            // Proceed with conversion using the complete HL7 message
+            String[] astmLines = convertOML_O33ToASTM(str_OML_O33);
+            if (astmLines.length == 1 && astmLines[0].startsWith("ERROR")) {
+                logger.error("Lab28 GeneXpert : Error during conversion to ASTM : " + astmLines[0]);
+                return "ERROR Lab28 GeneXpert : Invalid OML_O33 message";
+            }
+
+            logger.info("Lab28 GeneXpert : Converted ASTM message\n" + String.join("\n", astmLines));
+
+            String result = sendASTMMessage(astmLines);
+
+            String ackCode = "AA"; // Default HL7 ACK = accepted
+            if (!"ACK".equals(result)) {
+                ackCode = "AE"; // Application Error if analyzer rejected the message
+            }
+
+            String hl7Ack = generateAckR22(str_OML_O33, ackCode);
+            if (hl7Ack != null) {
+                logger.info("Lab28 GeneXpert : Returning HL7 ACK^R22 to LabBook");
+                return hl7Ack;
+            } else {
+                logger.error("Lab28 GeneXpert : Failed to generate HL7 ACK^R22");
+                return "ERROR Lab28 GeneXpert : Failed to generate HL7 ACK";
+            }
 
         } catch (HL7Exception e) {
-            logger.error("ERROR Lab28 GeneXpert processing OML^O33 message: " + e.getMessage());
+            logger.error("Lab28 GeneXpert : HL7Exception while processing OML^O33 - " + e.getMessage());
             return "ERROR Lab28 GeneXpert : Failed to process OML^O33 message";
         } catch (Exception e) {
-            logger.error("ERROR Lab28 GeneXpert unexpected error: " + e.getMessage());
+            logger.error("Lab28 GeneXpert : Unexpected exception - " + e.getMessage(), e);
             return "ERROR Lab28 GeneXpert : Unexpected error occurred";
         }
     }
 
-
     @Override
     public String lab29(final String msg) {
-        return processLabTransaction(msg, "LAB-29", this.url_upstream_lab29);
+        logger.info("Lab29 GeneXpert : Received ASTM message\n" + msg);
+
+        try {
+            Connect_util.archiveMessage(this.getId_analyzer(), this.archive_msg, msg, "LAB-29", "Analyzer");
+
+            // Split the ASTM message into individual lines
+            String[] astmLines = msg.replaceAll("[\\u000d\\u000a]+", "\n").split("\n");
+            for (String l : astmLines) {
+                logger.info("ASTM line: " + l);
+            }
+
+            // Convert ASTM to HL7 OUL^R22
+            String hl7Message = convertASTMtoOUL_R22(astmLines);
+            if (hl7Message == null || hl7Message.isEmpty()) {
+                logger.error("Lab29 GeneXpert : Error during conversion to HL7 OUL^R22.");
+                return "L|1|N"; // ASTM error response
+            }
+
+            logger.info("Lab29 GeneXpert : Converted HL7 OUL^R22:\n" + hl7Message.replace("\r", "\n"));
+
+            // Send HL7 message to LabBook and get the HL7 ACK response
+            String hl7Ack = Connect_util.send_hl7_msg(this, this.url_upstream_lab29, hl7Message);
+            logger.info("Lab29 GeneXpert : HL7 ACK from LabBook:\n" + hl7Ack.replace("\r", "\n"));
+
+            // Convert HL7 ACK back to a minimal ASTM acknowledgment
+            String astmAck = convertACKtoASTM(hl7Ack);
+            logger.info("Lab29 GeneXpert : Converted ASTM ACK to return:\n" + astmAck);
+
+            return astmAck;
+
+        } catch (Exception e) {
+            logger.error("Lab29 GeneXpert : Unexpected error - " + e.getMessage(), e);
+            return "L|1|N"; // ASTM fallback error response
+        }
+    }
+    
+    // === Conversions HL7 <=> ASTM ===
+    
+    public String[] convertOML_O33ToASTM(String oml) {
+        List<String> lines = new ArrayList<>();
+        String now = new SimpleDateFormat("yyyyMMddHHmmss").format(new Date());
+
+        try {
+            PipeParser parser = new PipeParser();
+            OML_O33 message = (OML_O33) parser.parse(oml);
+
+            PID pid = message.getPATIENT().getPID();
+
+            // Patient identifiers
+            String patId    = safeCX(pid.getPatientIdentifierList(), 0);
+            String patAltId = safeCX(pid.getPatientIdentifierList(), 1);
+
+            // Patient name
+            String lastName  = safeXPN(pid.getPatientName(), 0, true);
+            String firstName = safeXPN(pid.getPatientName(), 0, false);
+
+            // Sex / birth date
+            String sex = safe(pid.getAdministrativeSex());
+            String dob = safe(pid.getDateTimeOfBirth());
+
+            // Phone number / address
+            String phone   = safeXTN(pid.getPhoneNumberHome(), 0);
+            String address = safeXAD(pid.getPatientAddress(), 0, "street");
+            String city    = safeXAD(pid.getPatientAddress(), 0, "city");
+            String zip     = safeXAD(pid.getPatientAddress(), 0, "zip");
+
+            // Get first specimen group
+            OML_O33_SPECIMEN specimenGroup = message.getSPECIMEN();
+
+            // Extract specimen segment
+            SPM spm = specimenGroup.getSPM();
+            String specimenId = safe(spm.getSpecimenID().getPlacerAssignedIdentifier().getEntityIdentifier());
+            String specimenType = safe(spm.getSpecimenType().getIdentifier());
+
+            // Inside convertOML_O33ToASTM after parsing message and getting specimenGroup
+
+            Structure[] orderGroups = specimenGroup.getAll("ORDER");
+
+            OBR obr = null;
+
+            for (Structure orderStruct : orderGroups) {
+                Group orderGroup = (Group) orderStruct;
+                try {
+                    // Get all OBSERVATION_REQUEST groups inside this ORDER group
+                    Structure[] obsReqGroups = orderGroup.getAll("OBSERVATION_REQUEST");
+                    for (Structure obsReqStruct : obsReqGroups) {
+                        Group obsReqGroup = (Group) obsReqStruct;
+                        try {
+                            // Try to get OBR segment inside OBSERVATION_REQUEST group
+                            obr = (OBR) obsReqGroup.get("OBR");
+                            if (obr != null) break;
+                        } catch (HL7Exception e) {
+                            // Not found, continue
+                        }
+                    }
+                    if (obr != null) break;
+                } catch (HL7Exception e) {
+                    // Could not get OBSERVATION_REQUEST groups, continue
+                }
+            }
+
+            if (obr == null) {
+                logger.error("No OBR segment found in any OBSERVATION_REQUEST group");
+                return new String[] { "ERROR: No order found" };
+            }
+
+            // Extract test code and name from OBR
+            String testCode = safe(obr.getUniversalServiceIdentifier().getIdentifier());
+            String assayName = safe(obr.getUniversalServiceIdentifier().getText());
+            String assayVersion = "4.7";
+
+            // Build ASTM message lines
+            lines.add("H|\\^&|||INST^GeneXpert^" + assayVersion + "||||||P|1394-97|" + now);
+            lines.add("P|1|" + patId + "|" + patAltId + "|" + lastName + "^" + firstName + "||" +
+                      dob + "|" + sex + "||||" + address + "^^" + city + "^" + zip + "||" + phone);
+            lines.add("O|1|" + specimenId + "||^^^" + testCode + "^" + assayName + "^" + assayVersion +
+                      "^^|" + specimenType + "|" + now + "||||||||||||||||||F");
+            lines.add("L|1|N");
+
+            return lines.toArray(new String[0]);
+
+        } catch (Exception e) {
+            logger.error("ERROR while converting OML_O33 to ASTM: " + e.getMessage(), e);
+            return new String[] { "ERROR: Failed to convert HL7 to ASTM" };
+        }
+    }
+    
+    public String generateAckR22(String originalOML, String ackCode) {
+        try {
+            PipeParser parser = new PipeParser();
+            OML_O33 originalMsg = (OML_O33) parser.parse(originalOML);
+
+            ACK ack = new ACK();
+            ack.initQuickstart("ACK", "R22", "P");
+
+            ack.getMSH().getDateTimeOfMessage().getTime().setValue(new SimpleDateFormat("yyyyMMddHHmmss").format(new Date()));
+            ack.getMSH().getMessageControlID().setValue(originalMsg.getMSH().getMessageControlID().getValue());
+            ack.getMSH().getSendingApplication().parse("GeneXpert");
+            ack.getMSH().getSendingFacility().parse("Analyzer");
+            ack.getMSH().getReceivingApplication().parse(originalMsg.getMSH().getSendingApplication().encode());
+            ack.getMSH().getReceivingFacility().parse(originalMsg.getMSH().getSendingFacility().encode());
+
+            ack.getMSA().getAcknowledgmentCode().setValue(ackCode); // "AA" or "AE"
+            ack.getMSA().getMessageControlID().setValue(originalMsg.getMSH().getMessageControlID().getValue());
+
+            return parser.encode(ack);
+        } catch (Exception e) {
+            logger.error("Failed to generate HL7 ACK^R22: " + e.getMessage(), e);
+            return null;
+        }
+    }
+    
+    /**
+     * Converts ASTM-formatted GeneXpert result lines into an HL7 OUL^R22 message.
+     * @param lines An array of ASTM lines (e.g., H|..., P|..., O|..., R|..., etc.)
+     * @return The HL7 OUL^R22 message in ER7 format or null if conversion fails.
+     */
+    public String convertASTMtoOUL_R22(String[] lines) {
+        try {
+            StringBuilder hl7 = new StringBuilder();
+
+            // === MSH (construit manuellement) ===
+            String sendingApp = "GeneXpert";
+            String sendingFacility = "Analyzer";
+            String receivingApp = "LabBook";
+            String receivingFacility = "LIS";
+            String datetime = new SimpleDateFormat("yyyyMMddHHmmss").format(new Date());
+            String controlId = "MSG" + System.currentTimeMillis();
+
+            hl7.append("MSH|^~\\&|")
+                .append(sendingApp).append("|")
+                .append(sendingFacility).append("|")
+                .append(receivingApp).append("|")
+                .append(receivingFacility).append("|")
+                .append(datetime).append("||")
+                .append("OUL^R22|").append(controlId).append("|P|2.5.1\r");
+
+            String specimenId = null;
+            int obxIndex = 1;
+
+            for (String line : lines) {
+            	String[] fields = line.replaceFirst("^\\d*", "").split("\\|", -1);
+
+                switch (fields[0]) {
+                    case "P":
+                        specimenId = fields.length > 2 ? fields[2] : "UNKNOWN";
+                        hl7.append("PID|||").append(specimenId).append("||");
+
+                        if (fields.length > 4) hl7.append(fields[4]);
+                        hl7.append("||");
+
+                        if (fields.length > 6) hl7.append(fields[6]);
+                        hl7.append("|");
+
+                        if (fields.length > 7) hl7.append(fields[7]);
+                        hl7.append("\r");
+
+                        hl7.append("SPM|1|").append(specimenId).append("\r");
+                        break;
+
+                    case "O":
+                        hl7.append("ORC|RE|");
+                        if (fields.length > 2) hl7.append(fields[2]);
+                        hl7.append("\r");
+
+                        hl7.append("OBR|1|");
+                        if (fields.length > 2) hl7.append(fields[2]);
+                        hl7.append("||");
+
+                        if (fields.length > 4) hl7.append(fields[4]);
+                        hl7.append("\r");
+                        break;
+
+                    case "R":
+                        hl7.append("OBX|").append(obxIndex).append("|TX|");
+                        if (fields.length > 2) hl7.append(fields[2]);
+                        hl7.append("|");
+                        if (fields.length > 3) hl7.append(fields[3]);
+                        hl7.append("|||||||");
+                        hl7.append(fields.length > 11 ? fields[11] : "F").append("\r");
+                        obxIndex++;
+                        break;
+
+                    case "C":
+                        hl7.append("NTE|1|L|").append(
+                            String.join(" ", Arrays.copyOfRange(fields, 1, fields.length))
+                        ).append("\r");
+                        break;
+                }
+            }
+
+            hl7.append("L|1|N\r");
+
+            return hl7.toString();
+
+        } catch (Exception e) {
+            logger.error("GeneXpert: Failed to convert ASTM to HL7 OUL_R22", e);
+            return null;
+        }
     }
 
-    private String processLabTransaction(String msg, String labType, String url) {
-        logger.info(labType + " GeneXpert: Received message\n" + msg);
+    
+    public String convertACKtoASTM(String hl7Ack) {
         try {
-            Connect_util.archiveMessage(this.getId_analyzer(), this.archive_msg, msg, labType, "Analyzer");
-            String response = Connect_util.send_hl7_msg(this, url, msg.replace("\r", "\n"));
-            logger.info("DEBUG: Response from LIS:\n" + response.replace("\r", "\n"));
-            return response;
+            PipeParser parser = new PipeParser();
+            Message ackMsg = parser.parse(hl7Ack);
+
+            if (!(ackMsg instanceof ACK)) {
+                logger.error("convertACKtoASTM: Not an ACK message");
+                return "L|1|N";
+            }
+
+            ACK ack = (ACK) ackMsg;
+            String code = ack.getMSA().getAcknowledgmentCode().getValue();
+
+            // ASTM equivalent: "L|1|Y" if ACK=AA, otherwise "L|1|N"
+            return "AA".equals(code) ? "L|1|Y" : "L|1|N";
+
         } catch (Exception e) {
-        	logger.error("Unexpected error during LAB transaction processing: " + e.getMessage(), e);
-            return "ERROR: LIS transmission failed";
+            logger.error("convertACKtoASTM: Error converting HL7 to ASTM ACK - " + e.getMessage(), e);
+            return "L|1|N";
+        }
+    }
+    
+    /**
+     * Converts ASTM-formatted GeneXpert query (e.g., Q line) into an HL7 QBP^Q11 message.
+     * @param lines An array of ASTM lines (e.g., starting with Q|...)
+     * @return HL7 QBP^Q11 message in ER7 format or null if conversion fails.
+     */
+    public String convertASTMQueryToQBP_Q11(String[] lines) {
+        try {
+            // Find the line starting with Q| (query block)
+            String queryLine = Arrays.stream(lines)
+                    .filter(line -> line.startsWith("Q|"))
+                    .findFirst()
+                    .orElse(null);
+
+            if (queryLine == null) {
+                logger.error("convertASTMQueryToQBP_Q11: No Q line found in ASTM input.");
+                return null;
+            }
+
+            // Split ASTM Q line into fields
+            String[] fields = queryLine.split("\\|", -1);
+
+            // Prepare HL7 QBP_Q11 message (HL7 v2.5.1)
+            QBP_Q11 qbp = new QBP_Q11();
+            qbp.initQuickstart("QBP", "Q11", "P");
+
+            // Fill MSH (standard HL7 header)
+            MSH msh = qbp.getMSH();
+            msh.getSendingApplication().getNamespaceID().setValue("GeneXpert");
+            msh.getSendingFacility().getNamespaceID().setValue("Analyzer");
+            msh.getReceivingApplication().getNamespaceID().setValue("LabBook");
+            msh.getReceivingFacility().getNamespaceID().setValue("LIS");
+            msh.getDateTimeOfMessage().getTime().setValue(new SimpleDateFormat("yyyyMMddHHmmss").format(new Date()));
+            msh.getMessageControlID().setValue("MSG" + System.currentTimeMillis());
+            msh.getVersionID().getVersionID().setValue("2.5.1");
+
+            // Fill QPD segment (Query Parameter Definition)
+            QPD qpd = qbp.getQPD();
+            qpd.getMessageQueryName().getIdentifier().setValue("LAB-27^IHE");
+            qpd.getQueryTag().setValue("GENEXPERT");
+
+            // Use ASTM field[2] as specimen ID if available
+            if (fields.length > 2) {
+                qpd.getField(3, 0).parse(fields[2]);
+            }
+
+            // Fill RCP (response control parameters)
+            RCP rcp = qbp.getRCP();
+            rcp.getQueryPriority().setValue("I");  // I = Immediate
+
+            // Encode to HL7 string
+            PipeParser parser = new PipeParser();
+            return parser.encode(qbp);
+
+        } catch (Exception e) {
+            logger.error("convertASTMQueryToQBP_Q11: Failed to convert ASTM to QBP^Q11: " + e.getMessage(), e);
+            return null;
+        }
+    }
+    
+    /**
+     * Converts an HL7 RSP^K11 message into an array of ASTM lines (for GeneXpert).
+     * @param hl7Message HL7 message string in ER7 format (pipe-delimited)
+     * @return Array of ASTM lines or null if conversion failed
+     */
+    public String[] convertRSP_K11toASTM(String hl7Message) {
+        List<String> lines = new ArrayList<>();
+        String now = new SimpleDateFormat("yyyyMMddHHmmss").format(new Date());
+
+        try {
+            PipeParser parser = new PipeParser();
+            Message msg = parser.parse(hl7Message);
+
+            if (!"RSP_K11".equals(msg.getName())) {
+                logger.error("convertRSP_K11toASTM: Not a RSP^K11 message");
+                return null;
+            }
+
+            // Extract basic segments
+            PID pid = (PID) msg.get("PID");
+            ORC orc = (ORC) msg.get("ORC");
+            OBR obr = (OBR) msg.get("OBR");
+
+            // Patient fields
+            String patId    = safeCX(pid.getPatientIdentifierList(), 0);
+            String patAltId = safeCX(pid.getPatientIdentifierList(), 1);
+            String lastName = safeXPN(pid.getPatientName(), 0, true);
+            String firstName = safeXPN(pid.getPatientName(), 0, false);
+            String dob = safe(pid.getDateTimeOfBirth());
+            String sex = safe(pid.getAdministrativeSex());
+            String phone = safeXTN(pid.getPhoneNumberHome(), 0);
+            String address = safeXAD(pid.getPatientAddress(), 0, "street");
+            String city = safeXAD(pid.getPatientAddress(), 0, "city");
+            String zip = safeXAD(pid.getPatientAddress(), 0, "zip");
+
+            // Specimen / order
+            String specimenId = safe(orc.getPlacerOrderNumber().getEntityIdentifier());
+            String testCode = safe(obr.getUniversalServiceIdentifier().getIdentifier());
+            String assayName = safe(obr.getUniversalServiceIdentifier().getText());
+            String assayVersion = "4.7";  // Hardcoded unless retrieved from OBR
+            String specimenType = "";     // Optional – no SPM in this response
+
+            // ASTM lines
+            lines.add("H|\\^&|||INST^GeneXpert^" + assayVersion + "||||||P|1394-97|" + now);
+            lines.add("P|1|" + patId + "|" + patAltId + "|" + lastName + "^" + firstName + "||" +
+                      dob + "|" + sex + "||||" + address + "^^" + city + "^" + zip + "||" + phone);
+            lines.add("O|1|" + specimenId + "||^^^" + testCode + "^" + assayName + "^" + assayVersion +
+                      "^^|" + specimenType + "|" + now + "||||||||||||||||||F");
+
+            // Extract OBX values if present
+            Structure[] obxList = msg.getAll("OBX");
+            int obxIndex = 1;
+            for (Structure struct : obxList) {
+                OBX obx = (OBX) struct;
+                String id = safe(obx.getObservationIdentifier().getIdentifier());
+                String value = "";
+                try {
+                    value = ((ST) obx.getObservationValue(0).getData()).getValue();
+                } catch (Exception e) { value = ""; }
+                String status = safe(obx.getObservationResultStatus());
+
+                lines.add("R|" + obxIndex + "|" + id + "|" + value + "|||||||" + status);
+                obxIndex++;
+            }
+
+            // Optional comment in NTE
+            try {
+                NTE nte = (NTE) msg.get("NTE");
+                String comment = nte.getComment(0).getValue();
+                if (comment != null && !comment.isEmpty()) {
+                    lines.add("C|" + comment);
+                }
+            } catch (Exception e) {
+                // NTE not present → skip
+            }
+
+            lines.add("L|1|N");
+            return lines.toArray(new String[0]);
+
+        } catch (Exception e) {
+            logger.error("convertRSP_K11toASTM: Failed to parse or convert message - " + e.getMessage(), e);
+            return null;
         }
     }
 
     // === Communication Management ===
-
-    /**
-     * Sends an HL7-formatted message to the analyzer via the active socket connection and waits synchronously for the response.
-     * <p>
-     * The method first encapsulates the provided HL7 message using the standard MLLP framing protocol.
-     * It then sends the framed message through the established socket connection.
-     * <p>
-     * After sending, the method waits synchronously for the response message to be returned by the analyzer.
-     * If the response isn't received within a defined timeout period, the method returns an appropriate error message indicating a timeout.
-     * <p>
-     * This method handles exceptions related to I/O errors (such as network issues) and thread interruptions gracefully.
-     *
-     * @param hl7Message The HL7 message (plain string) to be sent.
-     * @return The HL7 response message from the analyzer, or an error message if a timeout or other issue occurs.
-     */
-    public String sendHL7MessageToAnalyzer(String hl7Message) {
-        if (socket == null || socket.isClosed() || outputStream == null) {
-            return "ERROR: No active connection";
-        }
-
+    
+    public String sendASTMMessage(String[] lines) {
         try {
-            synchronized (responseLock) {
-                expectedResponse = null;
-                waitingForResponse = true;
-            }
-
-            String framedMessage = Connect_util.encapsulateHL7Message(hl7Message);
-            outputStream.write(framedMessage.getBytes(StandardCharsets.UTF_8));
+            logger.info(">>> Sending ENQ");
+            outputStream.write(ENQ);
             outputStream.flush();
-            logger.info("DEBUG: Sent HL7 message:\n" + hl7Message.replace("\r", "\n"));
 
-            synchronized (responseLock) {
-                long startTime = System.currentTimeMillis();
-                while (expectedResponse == null && (System.currentTimeMillis() - startTime) < 5000) {
-                    responseLock.wait(500);
-                }
-                waitingForResponse = false;
-
-                if (expectedResponse == null) {
-                    return "ERROR: Response timeout";
-                }
-                return expectedResponse;
+            int response = inputStream.read();
+            if (response == ACK) {
+                logger.info("<<< Response: ACK");
+            } else if (response == NAK) {
+                logger.warn("<<< Response: NAK");
+                return "NAK";
+            } else {
+                logger.warn("<<< Response: Unexpected byte: " + response);
+                return "UNKNOWN";
             }
 
-        } catch (IOException | InterruptedException e) {
-            Thread.currentThread().interrupt();
-            logger.error("ERROR sending HL7 message: " + e.getMessage());
-            return "ERROR: Sending failed";
+            for (int i = 0; i < lines.length; i++) {
+                String body = ((i + 1) % 8) + lines[i];
+                byte[] bodyBytes = body.getBytes(StandardCharsets.US_ASCII);
+                ByteArrayOutputStream frame = new ByteArrayOutputStream();
+                frame.write(STX);
+                frame.write(bodyBytes);
+                frame.write(ETX);
+
+                int checksum = 0;
+                for (int j = 1; j < frame.size(); j++) {
+                    checksum += frame.toByteArray()[j];
+                }
+                checksum = checksum & 0xFF;
+                String checksumStr = String.format("%02X", checksum);
+
+                frame.write(checksumStr.getBytes(StandardCharsets.US_ASCII));
+                frame.write(CR);
+                frame.write(LF);
+
+                logger.info(">>> Sending frame " + (i + 1) + ": " + lines[i]);
+                outputStream.write(frame.toByteArray());
+                outputStream.flush();
+
+                int frameResp = inputStream.read();
+                if (frameResp == ACK) {
+                    logger.info("<<< Response: ACK");
+                } else if (frameResp == NAK) {
+                    logger.warn("<<< Response: NAK");
+                    return "NAK";
+                } else {
+                    logger.warn("<<< Response: Unexpected byte: " + frameResp);
+                    return "UNKNOWN";
+                }
+            }
+
+            logger.info(">>> Sending EOT");
+            outputStream.write(EOT);
+            outputStream.flush();
+
+            return "ACK"; // if all went well
+
+        } catch (IOException e) {
+            logger.error("ASTM send error: " + e.getMessage());
+            return "ERROR";
         }
     }
 
+    
     /**
      * Starts the communication listener thread for the analyzer device.
      * <p>
@@ -292,7 +808,7 @@ public class AnalyzerGeneXpert implements Analyzer {
         logger.info("DEBUG: this.mode = " + this.mode);
         logger.info("Connecting to analyzer at " + ip_analyzer + ":" + port_analyzer);
 
-        if ("socket".equalsIgnoreCase(this.type_cnx)) {
+        if ("socket_E1381".equalsIgnoreCase(this.type_cnx)) {
             new Thread(() -> {
                 int backoffTime = 5000; // Initial delay (5s)
                 int maxBackoffTime = 60000; // Max delay (1 min)
@@ -300,11 +816,11 @@ public class AnalyzerGeneXpert implements Analyzer {
                 while (true) {
                     try {
                         if ("client".equalsIgnoreCase(this.mode)) {
-                            logger.info("DEBUG: Starting HL7 client mode...");
+                            logger.info("DEBUG: Starting ASTM client mode...");
                             connectAsClient();
                         } else {
-                            logger.info("DEBUG: Starting HL7 server mode...");
-                            startHL7Server();
+                            logger.info("DEBUG: Starting ASTM server mode...");
+                            startASTMServer();
                         }
 
                         if (socket == null || socket.isClosed()) {
@@ -344,7 +860,7 @@ public class AnalyzerGeneXpert implements Analyzer {
      * Establishes a connection to the analyzer in CLIENT mode.
      * <p>
      * This method initializes the socket connection using the configured IP address and port of the analyzer.
-     * It sets up input and output streams for subsequent message exchanges (e.g., HL7 transactions).
+     * It sets up input and output streams for subsequent message exchanges (e.g., ASTM transactions).
      * <p>
      * If a connection already exists and is open, no action is performed.
      *
@@ -358,12 +874,12 @@ public class AnalyzerGeneXpert implements Analyzer {
     }
     
     /**
-     * Starts an HL7 MLLP server that listens for incoming HL7 messages.
+     * Starts an ASTM server that listens for incoming ASTM messages.
      */
-    private void startHL7Server() {
+    private void startASTMServer() {
         while (true) {
             try (ServerSocket serverSocket = new ServerSocket(port_analyzer)) {
-                logger.info("DEBUG: HL7 Server started on port " + port_analyzer);
+                logger.info("DEBUG: ASTM Server started on port " + port_analyzer);
 
                 while (true) {
                     try {
@@ -379,7 +895,7 @@ public class AnalyzerGeneXpert implements Analyzer {
                     }
                 }
             } catch (IOException e) {
-                logger.error("ERROR: Failed to start HL7 server on port " + port_analyzer + ": " + e.getMessage());
+                logger.error("ERROR: Failed to start ASTM server on port " + port_analyzer + ": " + e.getMessage());
                 logger.info("DEBUG: Retrying in 10 seconds...");
                 try {
                     Thread.sleep(10000); // Wait 10 seconds before retrying
@@ -392,46 +908,46 @@ public class AnalyzerGeneXpert implements Analyzer {
         }
     }
     
-    /**
-     * Handles an HL7 client connection.
-     *
-     * @param clientSocket The socket connected to the HL7 client.
-     */
     private void handleClientConnection(Socket clientSocket) {
         try (InputStream clientInputStream = clientSocket.getInputStream();
              OutputStream clientOutputStream = clientSocket.getOutputStream()) {
 
-            // Read incoming HL7 message
+            // Read incoming message from analyzer
             String receivedMessage = Connect_util.readMLLPMessage(clientInputStream);
             if (!receivedMessage.isEmpty()) {
-                logger.info("DEBUG: Received HL7 message:\n" + receivedMessage.replace("\r", "\n"));
+                logger.info("DEBUG: Received message from analyzer:\n" + receivedMessage.replace("\r", "\n"));
 
-                // Forward the message to the analyzer
+                // Route the message through the appropriate handler
                 String response = processAnalyzerMsg(receivedMessage);
 
-                // If the analyzer provides a response, send it back to the client
+                // Return response only if non-null and non-empty
                 if (response != null && !response.isEmpty()) {
-                	logger.info("DEBUG: Preparing to send ACK:\n" + response.replace("\r", "\n"));
+                    logger.info("DEBUG: Preparing response to analyzer:\n" + response.replace("\r", "\n"));
 
-                    // Ensure the ACK is properly encapsulated in MLLP
-                    String mllpAck = Connect_util.encapsulateHL7Message(response);
+                    // Determine if ASTM or HL7 response
+                    boolean isASTM = receivedMessage.trim().startsWith("H|");
 
-                    // Send the encapsulated ACK to the client
-                    clientOutputStream.write(mllpAck.getBytes(StandardCharsets.UTF_8));
-                    clientOutputStream.flush();  // Ensure all bytes are sent
+                    // Send response without MLLP wrapping if ASTM, else wrap HL7 with MLLP
+                    byte[] outputBytes = isASTM
+                        ? response.getBytes(StandardCharsets.US_ASCII)
+                        : Connect_util.encapsulateHL7Message(response).getBytes(StandardCharsets.UTF_8);
 
-                    logger.info("DEBUG: ACK sent successfully to the analyzer.");
+                    clientOutputStream.write(outputBytes);
+                    clientOutputStream.flush();
+
+                    logger.info("DEBUG: Response sent successfully to analyzer.");
                 } else {
-                    logger.warn("WARNING: No ACK generated, nothing sent to the analyzer.");
+                    logger.warn("WARNING: No response generated to send to analyzer.");
                 }
             }
+
         } catch (IOException e) {
-            logger.error("ERROR: Failed to process HL7 message: " + e.getMessage());
+            logger.error("ERROR: Failed to process incoming analyzer message: " + e.getMessage());
         } finally {
             try {
                 clientSocket.close();
             } catch (IOException e) {
-                logger.error("ERROR: Failed to close client socket: " + e.getMessage());
+                logger.error("ERROR: Failed to close analyzer socket: " + e.getMessage());
             }
         }
     }
@@ -451,108 +967,266 @@ public class AnalyzerGeneXpert implements Analyzer {
     }
 
     /**
-     * Listens for incoming HL7 messages on an open socket connection.
-     * It processes valid HL7 messages while preventing unnecessary logging for empty reads.
+     * Continuously listens for ASTM messages from the analyzer over the socket connection.
+     * Handles ASTM protocol: expects ENQ, responds with ACK, receives frames until EOT,
+     * processes the message, and sends a response if applicable.
      */
     private void listenForIncomingMessages() {
         while (this.listening) {
             try {
-                // Check if there is data available before attempting to read
                 if (this.inputStream.available() == 0) {
-                    Thread.sleep(500);  // Passive wait to avoid busy looping
+                    Thread.sleep(500); // Avoid busy-waiting
                     continue;
                 }
 
-                // Read the HL7 message encapsulated in MLLP format
-                String receivedMessage = Connect_util.readMLLPMessage(this.inputStream);
-
-                // Ensure that a valid message was received before processing
-                if (receivedMessage.isEmpty()) {
-                    Thread.sleep(500);  // Avoid excessive logging and CPU usage
+                // Step 1: Wait for ENQ
+                int byteRead = inputStream.read();
+                if (byteRead != ENQ) {
+                    logger.warn("Expected ENQ but received: " + byteRead);
                     continue;
                 }
 
-                synchronized (responseLock) {
-                    if (waitingForResponse) {  
-                        // Store the expected response and notify waiting threads
-                        expectedResponse = receivedMessage;
-                        responseLock.notifyAll();
-                        waitingForResponse = false;
-                        logger.info("DEBUG: Stored expected HL7 response.");
-                    } else {
-                        logger.info("DEBUG: Received from analyzer an HL7 message:\n" + receivedMessage.replace("\r", "\n"));
-                        // Process the message and retrieve the response
-                        String responseMessage = processAnalyzerMsg(receivedMessage);
+                logger.info("<<< Received ENQ — sending ACK");
+                outputStream.write(ACK);
+                outputStream.flush();
 
-                        // If a response is generated, send it back to the analyzer
-                        if (responseMessage != null && !responseMessage.isEmpty()) {
-                            try {
-                                if (this.outputStream != null) {
-                                    // Encapsulate the HL7 message using MLLP format and send it through the socket
-                                    this.outputStream.write(Connect_util.encapsulateHL7Message(responseMessage).getBytes(StandardCharsets.UTF_8));
-                                    this.outputStream.flush();
-                                    logger.info("DEBUG: Sent HL7 response to analyzer:\n" + responseMessage.replace("\r", "\n"));
-                                } else {
-                                    logger.error("ERROR: Output stream is null, cannot send response.");
-                                }
-                            } catch (IOException e) {
-                                logger.error("ERROR: Failed to send HL7 response to analyzer: " + e.getMessage());
-                            }
-                        } else {
-                            logger.warn("WARNING: processAnalyzerMsg() did not return a response.");
-                        }
+                // Step 2: Read frames until EOT
+                ByteArrayOutputStream msgBuffer = new ByteArrayOutputStream();
+
+                while (true) {
+                    int start = inputStream.read();
+                    if (start == EOT) {
+                        logger.info("<<< Received EOT — message transmission complete");
+                        break;
                     }
+
+                    if (start != STX) {
+                        logger.warn("Expected STX but got: " + start);
+                        continue;
+                    }
+
+                    ByteArrayOutputStream frameBuf = new ByteArrayOutputStream();
+                    int data;
+                    while ((data = inputStream.read()) != ETX) {
+                        frameBuf.write(data);
+                    }
+
+                    int checksumByte1 = inputStream.read();
+                    int checksumByte2 = inputStream.read();
+                    inputStream.read(); // CR
+                    inputStream.read(); // LF
+
+                    // Checksum calculation
+                    String receivedChecksum = "" + (char) checksumByte1 + (char) checksumByte2;
+                    int calculatedChecksum = 0;
+                    byte[] frameBytes = frameBuf.toByteArray();
+                    for (byte b : frameBytes) {
+                        calculatedChecksum += b;
+                    }
+                    calculatedChecksum += ETX; // Include ETX in checksum
+                    calculatedChecksum &= 0xFF;
+                    String expectedChecksum = String.format("%02X", calculatedChecksum);
+
+                    if (!receivedChecksum.equalsIgnoreCase(expectedChecksum)) {
+                        logger.warn("Checksum mismatch: expected {} but got {}", expectedChecksum, receivedChecksum);
+                        outputStream.write(NAK);
+                        outputStream.flush();
+                        continue;
+                    } else {
+                        outputStream.write(ACK);
+                        outputStream.flush();
+                    }
+
+                    String frameStr = new String(frameBytes, StandardCharsets.US_ASCII);
+                    msgBuffer.write(frameStr.getBytes(StandardCharsets.US_ASCII));
+                    msgBuffer.write('\r');
+                }
+
+                String receivedMessage = msgBuffer.toString(StandardCharsets.US_ASCII).trim();
+                if (receivedMessage.isEmpty()) {
+                    logger.warn("Empty ASTM message received — ignored.");
+                    continue;
+                }
+
+                logger.info("DEBUG: Complete ASTM message:\n{}", receivedMessage.replace("\r", "\n"));
+
+                // Step 3: Process the message and send response if needed
+                String responseMessage = processAnalyzerMsg(receivedMessage);
+                if (responseMessage != null && !responseMessage.isEmpty()) {
+                    logger.info(">>> Sending ASTM response:\n" + responseMessage.replace("\r", "\n"));
+
+                    String[] responseLines = responseMessage.split("\r|\n");
+                    sendASTMMessage(responseLines);
+                } else {
+                    logger.warn("No response generated for received ASTM message.");
                 }
 
             } catch (IOException | InterruptedException e) {
                 this.listening = false;
-                logger.error("ERROR: Exception in listenForIncomingMessages: " + e.getMessage());
+                logger.error("Exception in listenForIncomingMessages (ASTM): " + e.getMessage(), e);
             }
         }
     }
 
-    /**
-     * Processes incoming HL7 messages, determines the message type,
-     * forwards it to the LIS if necessary, and returns the appropriate acknowledgment (ACK).
-     *
-     * @param hl7Message The received HL7 message.
-     * @return A response HL7 message (ACK) if applicable, otherwise null.
-     */
-    private String processAnalyzerMsg(String hl7Message) {
+    private String processAnalyzerMsg(String receivedMessage) {
         try {
-            PipeParser parser = new PipeParser();
-            parser.getParserConfiguration().setValidating(false);
-
-            // Parse the HL7 message
-            Message message = parser.parse(hl7Message);
-            String messageType = message.getName();
-            logger.info("DEBUG: messageType = " + messageType);
-
-            String responseMessage = null;
-            
-            // Determine the message type and forward it accordingly
-            if (messageType.contains("OUL_R22")) {
-                responseMessage = lab29(hl7Message); // Forward to LIS and return ACK to the analyzer
-                logger.info("DEBUG: Response message from LIS on lab29:\n" + responseMessage);
-            } else if (messageType.contains("QBP_Q11")) {
-                responseMessage = lab27(hl7Message);
-                logger.info("DEBUG: Response message from LIS on lab27:\n" + responseMessage);
+            // Always ASTM from GeneXpert
+        	if (receivedMessage.matches("(?s).*\\n?\\d*H\\|.*")) {
+                logger.info("DEBUG: Detected ASTM message, routing to lab29...");
+                return lab29(receivedMessage);
+            } else if (receivedMessage.matches("(?s).*\\n?\\d*Q\\|.*")) {
+                logger.info("DEBUG: Detected ASTM query message, routing to lab27...");
+                return lab27(receivedMessage);
             } else {
-                logger.info("DEBUG: Received an unknown HL7 message type.");
+                logger.warn("DEBUG: Received unexpected non-ASTM message from GeneXpert, ignored.");
                 return null;
             }
-            
-            // If an ACK is generated, encapsulate it in MLLP before returning
-            if (responseMessage != null) {
-                responseMessage = Connect_util.encapsulateHL7Message(responseMessage);
-                logger.info("DEBUG: Encapsulated ACK response in MLLP format: " + responseMessage.replace("\r", "\n"));
-            }
-
-            return responseMessage;
-
-        } catch (HL7Exception e) {
-            logger.error("ERROR: Failed to parse HL7 message: " + e.getMessage());
+        } catch (Exception e) {
+            logger.error("ERROR: Exception in processAnalyzerMsg: " + e.getMessage(), e);
             return null;
+        }
+    }
+    
+    public static String readASTMMessage(InputStream inputStream) throws IOException {
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        int byteRead;
+
+        boolean inFrame = false;
+
+        while ((byteRead = inputStream.read()) != -1) {
+            if (byteRead == 0x04) { // EOT = End Of Transmission
+                break;
+            }
+            if (byteRead == 0x02) { // STX = Start of Text
+                inFrame = true;
+                continue;
+            }
+            if (byteRead == 0x03) { // ETX = End of Text
+                // Frame done – discard following 2 checksum bytes + CR + LF
+                inputStream.read(); // Checksum byte 1
+                inputStream.read(); // Checksum byte 2
+                inputStream.read(); // CR
+                inputStream.read(); // LF
+                buffer.write('\r'); // ASTM segment delimiter
+                inFrame = false;
+                continue;
+            }
+            if (inFrame) {
+                buffer.write(byteRead);
+            }
+        }
+
+        String msg = buffer.toString(StandardCharsets.US_ASCII).trim();
+
+        if (!msg.isEmpty()) {
+            logger.info("Complete ASTM message received:\n{}", msg.replace("\r", "\n"));
+        }
+
+        return msg;
+    }
+    
+    // === utility function ===
+    
+    /**
+     * Safely extracts a timestamp value from a TS field (e.g., PID-7 birth date).
+     * Returns empty string if null or invalid.
+     */
+    private String safe(TS ts) {
+        try {
+            return ts != null && ts.getTime() != null ? ts.getTime().getValue() : "";
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    /**
+     * Safely extracts patient name components from an XPN list (e.g., PID-5).
+     * If lastName=true → returns family name.
+     * If lastName=false → returns given name.
+     */
+    private String safeXPN(XPN[] list, int index, boolean lastName) {
+        try {
+            if (list != null && list.length > index && list[index] != null) {
+                return lastName
+                    ? list[index].getFamilyName().getSurname().getValue()
+                    : list[index].getGivenName().getValue();
+            }
+        } catch (Exception e) {}
+        return "";
+    }
+
+    /**
+     * Safely extracts IDNumber from a CX field (e.g., patient identifiers PID-3).
+     * Index allows retrieving primary or alternate patient ID.
+     */
+    private String safeCX(CX[] list, int index) {
+        try {
+            if (list != null && list.length > index && list[index] != null) {
+                return list[index].getIDNumber().getValue();
+            }
+        } catch (Exception e) {}
+        return "";
+    }
+
+    /**
+     * Safely extracts telephone number from an XTN list (e.g., PID-13).
+     */
+    private String safeXTN(XTN[] list, int index) {
+        try {
+            if (list != null && list.length > index && list[index] != null) {
+                return list[index].getTelephoneNumber().getValue();
+            }
+        } catch (Exception e) {}
+        return "";
+    }
+
+    /**
+     * Safely extracts address components from an XAD list (e.g., PID-11).
+     * `part` must be "street", "city", or "zip".
+     */
+    private String safeXAD(XAD[] list, int index, String part) {
+        try {
+            if (list != null && list.length > index && list[index] != null) {
+                switch (part) {
+                    case "street":
+                        return list[index].getStreetAddress().getStreetOrMailingAddress().getValue();
+                    case "city":
+                        return list[index].getCity().getValue();
+                    case "zip":
+                        return list[index].getZipOrPostalCode().getValue();
+                }
+            }
+        } catch (Exception e) {}
+        return "";
+    }
+
+    /**
+     * Safely extracts value from a primitive IS field (e.g., AdministrativeSex).
+     */
+    private String safe(IS is) {
+        try {
+            return is != null ? is.getValue() : "";
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    /**
+     * Safely extracts value from a primitive ST field (e.g., OBR-4 test name).
+     */
+    private String safe(ST st) {
+        try {
+            return st != null ? st.getValue() : "";
+        } catch (Exception e) {
+            return "";
+        }
+    }
+    
+    private String safe(ID id) {
+        try {
+            return id != null ? id.getValue() : "";
+        } catch (Exception e) {
+            return "";
         }
     }
 
