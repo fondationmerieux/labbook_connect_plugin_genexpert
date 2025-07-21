@@ -22,7 +22,6 @@ import ca.uhn.hl7v2.model.Group;
 import ca.uhn.hl7v2.model.Message;
 import ca.uhn.hl7v2.model.Structure;
 import ca.uhn.hl7v2.model.v251.datatype.CX;
-import ca.uhn.hl7v2.model.v251.datatype.ID;
 import ca.uhn.hl7v2.model.v251.datatype.IS;
 import ca.uhn.hl7v2.model.v251.datatype.ST;
 import ca.uhn.hl7v2.model.v251.datatype.TS;
@@ -33,10 +32,7 @@ import ca.uhn.hl7v2.model.v251.group.OML_O33_SPECIMEN;
 import ca.uhn.hl7v2.model.v251.message.OML_O33;
 import ca.uhn.hl7v2.model.v251.message.QBP_Q11;
 import ca.uhn.hl7v2.model.v251.segment.MSH;
-import ca.uhn.hl7v2.model.v251.segment.NTE;
 import ca.uhn.hl7v2.model.v251.segment.OBR;
-import ca.uhn.hl7v2.model.v251.segment.OBX;
-import ca.uhn.hl7v2.model.v251.segment.ORC;
 import ca.uhn.hl7v2.model.v251.segment.PID;
 import ca.uhn.hl7v2.model.v251.segment.QPD;
 import ca.uhn.hl7v2.model.v251.segment.RCP;
@@ -53,7 +49,7 @@ public class AnalyzerGeneXpert implements Analyzer {
 	
 	private static final Logger logger = LoggerFactory.getLogger(AnalyzerGeneXpert.class); // Uses Connect's logback.xml
 	
-	private final String jar_version = "0.9.2";
+	private final String jar_version = "0.9.3";
 
     // === General Configuration ===
     protected String version = "";
@@ -230,7 +226,7 @@ public class AnalyzerGeneXpert implements Analyzer {
             // Send QBP^Q11 to LabBook
             String rspMsg = Connect_util.send_hl7_msg(this, this.url_upstream_lab27, qbpMsg);
             logger.info("Lab27 GeneXpert : Received RSP^K11 from LabBook\n" + rspMsg.replace("\r", "\n"));
-
+            
             // Convert RSP^K11 back to ASTM message for GeneXpert
             String[] astmResponse = convertRSP_K11toASTM(rspMsg);
             if (astmResponse == null || astmResponse.length == 0) {
@@ -350,6 +346,12 @@ public class AnalyzerGeneXpert implements Analyzer {
     }
     
     // === Conversions HL7 <=> ASTM ===
+    
+    private String[] stripASTMPrefixNumbers(String[] lines) {
+        return Arrays.stream(lines)
+            .map(line -> line.replaceFirst("^\\d(?=[A-Z]\\|)", "")) // enlève "2P|" → "P|"
+            .toArray(String[]::new);
+    }
     
     public String[] convertOML_O33ToASTM(String oml) {
         List<String> lines = new ArrayList<>();
@@ -472,6 +474,8 @@ public class AnalyzerGeneXpert implements Analyzer {
      */
     public String convertASTMtoOUL_R22(String[] lines) {
         try {
+        	lines = stripASTMPrefixNumbers(lines);
+        	
             StringBuilder hl7 = new StringBuilder();
 
             // === MSH (construit manuellement) ===
@@ -544,8 +548,6 @@ public class AnalyzerGeneXpert implements Analyzer {
                 }
             }
 
-            hl7.append("L|1|N\r");
-
             return hl7.toString();
 
         } catch (Exception e) {
@@ -553,7 +555,6 @@ public class AnalyzerGeneXpert implements Analyzer {
             return null;
         }
     }
-
     
     public String convertACKtoASTM(String hl7Ack) {
         try {
@@ -584,6 +585,8 @@ public class AnalyzerGeneXpert implements Analyzer {
      */
     public String convertASTMQueryToQBP_Q11(String[] lines) {
         try {
+        	lines = stripASTMPrefixNumbers(lines);
+        	
             // Find the line starting with Q| (query block)
             String queryLine = Arrays.stream(lines)
                     .filter(line -> line.startsWith("Q|"))
@@ -638,87 +641,70 @@ public class AnalyzerGeneXpert implements Analyzer {
     
     /**
      * Converts an HL7 RSP^K11 message into an array of ASTM lines (for GeneXpert).
-     * @param hl7Message HL7 message string in ER7 format (pipe-delimited)
+     * @param hl7Message HL7 message string in ER7 format
      * @return Array of ASTM lines or null if conversion failed
      */
-    public String[] convertRSP_K11toASTM(String hl7Message) {
-        List<String> lines = new ArrayList<>();
-        String now = new SimpleDateFormat("yyyyMMddHHmmss").format(new Date());
+    public static String[] convertRSP_K11toASTM(String hl7Message) {
+        StringBuilder astm = new StringBuilder();
+        astm.append("H|\\^&|||INST^GeneXpert^4.7||||||P|1394-97|").append(getCurrentDateTime()).append("\r");
 
-        try {
-            PipeParser parser = new PipeParser();
-            Message msg = parser.parse(hl7Message);
+        String[] segments = hl7Message.split("\r");
+        
+        String patientId = "";
+        String patientName = "";
+        String birthDate = "";
+        String sex = "";
+        String spmId = "";
+        String obrCode = "";
+        String obrName = "";
 
-            if (!"RSP_K11".equals(msg.getName())) {
-                logger.error("convertRSP_K11toASTM: Not a RSP^K11 message");
-                return null;
-            }
-
-            // Extract basic segments
-            PID pid = (PID) msg.get("PID");
-            ORC orc = (ORC) msg.get("ORC");
-            OBR obr = (OBR) msg.get("OBR");
-
-            // Patient fields
-            String patId    = safeCX(pid.getPatientIdentifierList(), 0);
-            String patAltId = safeCX(pid.getPatientIdentifierList(), 1);
-            String lastName = safeXPN(pid.getPatientName(), 0, true);
-            String firstName = safeXPN(pid.getPatientName(), 0, false);
-            String dob = safe(pid.getDateTimeOfBirth());
-            String sex = safe(pid.getAdministrativeSex());
-            String phone = safeXTN(pid.getPhoneNumberHome(), 0);
-            String address = safeXAD(pid.getPatientAddress(), 0, "street");
-            String city = safeXAD(pid.getPatientAddress(), 0, "city");
-            String zip = safeXAD(pid.getPatientAddress(), 0, "zip");
-
-            // Specimen / order
-            String specimenId = safe(orc.getPlacerOrderNumber().getEntityIdentifier());
-            String testCode = safe(obr.getUniversalServiceIdentifier().getIdentifier());
-            String assayName = safe(obr.getUniversalServiceIdentifier().getText());
-            String assayVersion = "4.7";  // Hardcoded unless retrieved from OBR
-            String specimenType = "";     // Optional – no SPM in this response
-
-            // ASTM lines
-            lines.add("H|\\^&|||INST^GeneXpert^" + assayVersion + "||||||P|1394-97|" + now);
-            lines.add("P|1|" + patId + "|" + patAltId + "|" + lastName + "^" + firstName + "||" +
-                      dob + "|" + sex + "||||" + address + "^^" + city + "^" + zip + "||" + phone);
-            lines.add("O|1|" + specimenId + "||^^^" + testCode + "^" + assayName + "^" + assayVersion +
-                      "^^|" + specimenType + "|" + now + "||||||||||||||||||F");
-
-            // Extract OBX values if present
-            Structure[] obxList = msg.getAll("OBX");
-            int obxIndex = 1;
-            for (Structure struct : obxList) {
-                OBX obx = (OBX) struct;
-                String id = safe(obx.getObservationIdentifier().getIdentifier());
-                String value = "";
-                try {
-                    value = ((ST) obx.getObservationValue(0).getData()).getValue();
-                } catch (Exception e) { value = ""; }
-                String status = safe(obx.getObservationResultStatus());
-
-                lines.add("R|" + obxIndex + "|" + id + "|" + value + "|||||||" + status);
-                obxIndex++;
-            }
-
-            // Optional comment in NTE
-            try {
-                NTE nte = (NTE) msg.get("NTE");
-                String comment = nte.getComment(0).getValue();
-                if (comment != null && !comment.isEmpty()) {
-                    lines.add("C|" + comment);
+        for (String segment : segments) {
+            if (segment.startsWith("PID|")) {
+                if (!patientId.isEmpty()) {
+                    astm.append("P|1|").append(patientId).append("||").append(patientName).append("||")
+                        .append(birthDate).append("|").append(sex).append("\r");
+                    astm.append("O|1|").append(spmId).append("||^^^").append(obrCode).append("^").append(obrName)
+                        .append("^4.7^^||").append(getCurrentDateTime()).append("||||||||||||||||||F\r");
                 }
-            } catch (Exception e) {
-                // NTE not present → skip
+
+                String[] fields = segment.split("\\|");
+                patientId = fields.length > 3 ? fields[3] : "";
+                patientName = fields.length > 5 ? fields[5] : "";
+                birthDate = fields.length > 7 ? fields[7] : "";
+                sex = fields.length > 8 ? fields[8] : "";
+
+                spmId = "";
+                obrCode = "";
+                obrName = "";
+
+            } else if (segment.startsWith("SPM|")) {
+                String[] fields = segment.split("\\|");
+                spmId = fields.length > 2 ? fields[2] : "";
+
+            } else if (segment.startsWith("OBR|")) {
+                String[] fields = segment.split("\\|");
+                if (fields.length > 4) {
+                    String[] testInfo = fields[4].split("\\^");
+                    obrCode = testInfo.length > 0 ? testInfo[0] : "";
+                    obrName = testInfo.length > 1 ? testInfo[1] : "";
+                }
             }
-
-            lines.add("L|1|N");
-            return lines.toArray(new String[0]);
-
-        } catch (Exception e) {
-            logger.error("convertRSP_K11toASTM: Failed to parse or convert message - " + e.getMessage(), e);
-            return null;
         }
+
+        // Flush last block if present
+        if (!patientId.isEmpty()) {
+            astm.append("P|1|").append(patientId).append("||").append(patientName).append("||")
+                .append(birthDate).append("|").append(sex).append("\r");
+            astm.append("O|1|").append(spmId).append("||^^^").append(obrCode).append("^").append(obrName)
+                .append("^4.7^^||").append(getCurrentDateTime()).append("||||||||||||||||||F\r");
+        }
+
+        astm.append("L|1|N\r");
+        return astm.toString().split("\r");
+    }
+
+    private static String getCurrentDateTime() {
+        return java.time.format.DateTimeFormatter.ofPattern("yyyyMMddHHmmss").format(java.time.LocalDateTime.now());
     }
 
     // === Communication Management ===
@@ -816,10 +802,10 @@ public class AnalyzerGeneXpert implements Analyzer {
                 while (true) {
                     try {
                         if ("client".equalsIgnoreCase(this.mode)) {
-                            logger.info("DEBUG: Starting ASTM client mode...");
+                            logger.info("Starting ASTM client mode...");
                             connectAsClient();
                         } else {
-                            logger.info("DEBUG: Starting ASTM server mode...");
+                            logger.info("Starting ASTM server mode...");
                             startASTMServer();
                         }
 
@@ -835,9 +821,9 @@ public class AnalyzerGeneXpert implements Analyzer {
 
                         while (this.listening) {
                             if (socket == null || socket.isClosed()) {
-                                logger.info("DEBUG: Connection lost, attempting reconnection...");
+                                logger.info("Connection lost, attempting reconnection...");
                                 reconnectSocket();
-                                logger.info("DEBUG: Waiting " + backoffTime + "ms before next reconnection attempt...");
+                                logger.info("Waiting " + backoffTime + "ms before next reconnection attempt...");
                                 Thread.sleep(backoffTime);
                                 backoffTime = Math.min(backoffTime * 2, maxBackoffTime);
                             }
@@ -879,13 +865,13 @@ public class AnalyzerGeneXpert implements Analyzer {
     private void startASTMServer() {
         while (true) {
             try (ServerSocket serverSocket = new ServerSocket(port_analyzer)) {
-                logger.info("DEBUG: ASTM Server started on port " + port_analyzer);
+                logger.info("ASTM Server started on port " + port_analyzer);
 
                 while (true) {
                     try {
                         // Wait for incoming client connection
                         Socket clientSocket = serverSocket.accept();
-                        logger.info("DEBUG: Accepted connection from " + clientSocket.getInetAddress());
+                        logger.info("Accepted connection from " + clientSocket.getInetAddress());
 
                         // Handle each client connection in a separate thread
                         new Thread(() -> handleClientConnection(clientSocket)).start();
@@ -896,7 +882,7 @@ public class AnalyzerGeneXpert implements Analyzer {
                 }
             } catch (IOException e) {
                 logger.error("ERROR: Failed to start ASTM server on port " + port_analyzer + ": " + e.getMessage());
-                logger.info("DEBUG: Retrying in 10 seconds...");
+                logger.info("Retrying in 10 seconds...");
                 try {
                     Thread.sleep(10000); // Wait 10 seconds before retrying
                 } catch (InterruptedException ie) {
@@ -915,14 +901,14 @@ public class AnalyzerGeneXpert implements Analyzer {
             // Read incoming message from analyzer
             String receivedMessage = Connect_util.readMLLPMessage(clientInputStream);
             if (!receivedMessage.isEmpty()) {
-                logger.info("DEBUG: Received message from analyzer:\n" + receivedMessage.replace("\r", "\n"));
+                logger.info("Received message from analyzer:\n" + receivedMessage.replace("\r", "\n"));
 
                 // Route the message through the appropriate handler
                 String response = processAnalyzerMsg(receivedMessage);
 
                 // Return response only if non-null and non-empty
                 if (response != null && !response.isEmpty()) {
-                    logger.info("DEBUG: Preparing response to analyzer:\n" + response.replace("\r", "\n"));
+                    logger.info("Preparing response to analyzer:\n" + response.replace("\r", "\n"));
 
                     // Determine if ASTM or HL7 response
                     boolean isASTM = receivedMessage.trim().startsWith("H|");
@@ -935,7 +921,7 @@ public class AnalyzerGeneXpert implements Analyzer {
                     clientOutputStream.write(outputBytes);
                     clientOutputStream.flush();
 
-                    logger.info("DEBUG: Response sent successfully to analyzer.");
+                    logger.info("Response sent successfully to analyzer.");
                 } else {
                     logger.warn("WARNING: No response generated to send to analyzer.");
                 }
@@ -981,6 +967,11 @@ public class AnalyzerGeneXpert implements Analyzer {
 
                 // Step 1: Wait for ENQ
                 int byteRead = inputStream.read();
+                if (byteRead == -1) {
+                    logger.info("Stream closed by peer (ENQ check). Exiting listener.");
+                    this.listening = false;
+                    break;
+                }
                 if (byteRead != ENQ) {
                     logger.warn("Expected ENQ but received: " + byteRead);
                     continue;
@@ -1070,17 +1061,23 @@ public class AnalyzerGeneXpert implements Analyzer {
 
     private String processAnalyzerMsg(String receivedMessage) {
         try {
-            // Always ASTM from GeneXpert
-        	if (receivedMessage.matches("(?s).*\\n?\\d*H\\|.*")) {
-                logger.info("DEBUG: Detected ASTM message, routing to lab29...");
-                return lab29(receivedMessage);
-            } else if (receivedMessage.matches("(?s).*\\n?\\d*Q\\|.*")) {
-                logger.info("DEBUG: Detected ASTM query message, routing to lab27...");
+            // Normalize to lines
+            String[] lines = receivedMessage.replaceAll("[\\u000d\\u000a]+", "\n").split("\n");
+
+            boolean hasH = Arrays.stream(lines).anyMatch(l -> l.matches("^\\d*H\\|.*"));
+            boolean hasQ = Arrays.stream(lines).anyMatch(l -> l.matches("^\\d*Q\\|.*"));
+
+            if (hasQ) {
+                logger.info("Detected ASTM query message with Q| segment, routing to lab27...");
                 return lab27(receivedMessage);
+            } else if (hasH) {
+                logger.info("Detected ASTM result message with H| segment, routing to lab29...");
+                return lab29(receivedMessage);
             } else {
-                logger.warn("DEBUG: Received unexpected non-ASTM message from GeneXpert, ignored.");
+                logger.warn("Received message without recognizable H| or Q| segment, ignored.");
                 return null;
             }
+
         } catch (Exception e) {
             logger.error("ERROR: Exception in processAnalyzerMsg: " + e.getMessage(), e);
             return null;
@@ -1222,6 +1219,7 @@ public class AnalyzerGeneXpert implements Analyzer {
         }
     }
     
+    /*
     private String safe(ID id) {
         try {
             return id != null ? id.getValue() : "";
@@ -1229,5 +1227,6 @@ public class AnalyzerGeneXpert implements Analyzer {
             return "";
         }
     }
+    */
 
 }

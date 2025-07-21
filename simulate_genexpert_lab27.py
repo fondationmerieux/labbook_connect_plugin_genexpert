@@ -13,13 +13,10 @@ LF = b'\x0A'
 HOST = '0.0.0.0'
 PORT = 12345
 
-astm_lines = [
-    "H|\\^&|||GeneXpert^4.7||||||P|1394-97|20250623093000",
-    "P|1|123456||Doe^John||19800101|M||||123 Main St^^Paris^75000||0123456789",
-    "O|1|SP123456||^^^XPRT01^COVID19^4.7^^|SERUM|20250623091500||||||||||||||||||F",
-    "R|1|RES01|DETECTED|||||||F",
-    "C|Valid result from simulated GeneXpert",
-    "L|1|N"
+astm_query = [
+    "H|\\^&|||GeneXpert^4.7||||||Q|1394-97|20250715120000",
+    "Q|1|ALL",
+    "L|1|F"
 ]
 
 def calculate_checksum(frame_bytes):
@@ -28,7 +25,7 @@ def calculate_checksum(frame_bytes):
         cs += b
     return f"{cs & 0xFF:02X}"
 
-def send_astm_message(conn):
+def send_astm_query(conn):
     print("[SEND] ENQ")
     conn.sendall(ENQ)
     resp = conn.recv(1)
@@ -36,7 +33,7 @@ def send_astm_message(conn):
         print(f"[ERR] Did not receive ACK after ENQ, got {resp}")
         return
 
-    for i, line in enumerate(astm_lines):
+    for i, line in enumerate(astm_query):
         frame_text = f"{(i+1)%8}{line}"
         body = frame_text.encode('ascii')
         frame = bytearray()
@@ -58,6 +55,11 @@ def send_astm_message(conn):
 
     print("[SEND] EOT")
     conn.sendall(EOT)
+    
+    # Receive response from plugin (optional)
+    data = conn.recv(4096)
+    print("[RECV] Response from plugin:")
+    print(data.decode('ascii', errors='replace').replace('\r', '\n'))
 
 def main():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
@@ -69,8 +71,8 @@ def main():
         conn, addr = server.accept()
         with conn:
             print(f"[INFO] Plugin connected from {addr}")
-            send_astm_message(conn)
-            print("[INFO] LAB-29 simulation complete.")
+            send_astm_query(conn)
+            print("[INFO] LAB-27 simulation complete.")
 
 if __name__ == '__main__':
     main()
