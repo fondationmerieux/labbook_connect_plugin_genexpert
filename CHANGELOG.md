@@ -3,6 +3,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.9.4] - 2025-07-18
+### Added
+- Added logging of all incoming bytes (hex + printable form) in listenForIncomingMessages() to help diagnose ASTM protocol-level issues.
+
+### Changed
+- The plugin listens continuously, and if no data is received within 10 seconds, a timeout occurs, but the socket remains open and listening resumes normally.
+- Replaced boolean listening with AtomicBoolean listening for proper thread-safe state management across listener threads.
+- Updated convertRSP_K11toASTM(...) to only include O| segments if both SPM and OBR fields are available, preventing invalid partial responses.
+
 ## [0.9.3] - 2025-07-17
 ### Changed
 - remove numbers at start of frame astm
