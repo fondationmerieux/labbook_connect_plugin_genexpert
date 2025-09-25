@@ -51,7 +51,7 @@ public class AnalyzerGeneXpert implements Analyzer {
 	
 	private static final Logger logger = LoggerFactory.getLogger(AnalyzerGeneXpert.class); // Uses Connect's logback.xml
 	
-	private final String jar_version = "0.9.4";
+	private final String jar_version = "0.9.6";
 
     // === General Configuration ===
     protected String version = "";
@@ -371,7 +371,7 @@ public class AnalyzerGeneXpert implements Analyzer {
     
     private String[] stripASTMPrefixNumbers(String[] lines) {
         return Arrays.stream(lines)
-            .map(line -> line.replaceFirst("^\\d(?=[A-Z]\\|)", "")) // enlève "2P|" → "P|"
+            .map(line -> line.replaceFirst("^[0-7](?=[A-Z]\\|)", ""))
             .toArray(String[]::new);
     }
     
@@ -533,58 +533,58 @@ public class AnalyzerGeneXpert implements Analyzer {
                 .append(datetime).append("||")
                 .append("OUL^R22|").append(controlId).append("|P|2.5.1\r");
 
+            String patientId = null;
             String specimenId = null;
             int obxIndex = 1;
 
             for (String line : lines) {
-            	String[] fields = line.replaceFirst("^\\d*", "").split("\\|", -1);
+            	String[] fields = line.split("\\|", -1);
 
-                switch (fields[0]) {
-                    case "P":
-                        specimenId = fields.length > 2 ? fields[2] : "UNKNOWN";
-                        hl7.append("PID|||").append(specimenId).append("||");
+            	switch (fields[0]) {
+            	case "P":
+            		patientId = (fields.length > 2) ? fields[2] : null;
+            		hl7.append("PID|||").append(patientId != null ? patientId : "")
+            		.append("||").append("\r");
+            		break;
 
-                        if (fields.length > 4) hl7.append(fields[4]);
-                        hl7.append("||");
+            	case "O":
+                    // O: order/specimen identifier
+                    specimenId = (fields.length > 2) ? fields[2] : null;
 
-                        if (fields.length > 6) hl7.append(fields[6]);
-                        hl7.append("|");
+                    // SPM should precede ORC/OBR in OUL^R22
+                    hl7.append("SPM|1|")
+                       .append(specimenId != null ? specimenId : "")
+                       .append("\r");
 
-                        if (fields.length > 7) hl7.append(fields[7]);
-                        hl7.append("\r");
+                    // ORC with placer order number = specimenId
+                    hl7.append("ORC|RE|")
+                       .append(specimenId != null ? specimenId : "")
+                       .append("\r");
 
-                        hl7.append("SPM|1|").append(specimenId).append("\r");
-                        break;
+                    // OBR with same placer order number; test code from O|5 if present
+                    hl7.append("OBR|1|")
+                       .append(specimenId != null ? specimenId : "")
+                       .append("||");
+                    if (fields.length > 4) hl7.append(fields[4]); // ^^^code^text^ver
+                    hl7.append("\r");
+                    break;
 
-                    case "O":
-                        hl7.append("ORC|RE|");
-                        if (fields.length > 2) hl7.append(fields[2]);
-                        hl7.append("\r");
+            	case "R":
+            		hl7.append("OBX|").append(obxIndex).append("|TX|");
+            		if (fields.length > 2) hl7.append(fields[2]); // observation identifier
+            		hl7.append("|");
+            		if (fields.length > 3) hl7.append(fields[3]); // value
+            		hl7.append("|||||||");
+            		hl7.append(fields.length > 11 ? fields[11] : "F").append("\r"); // status
+            		obxIndex++;
+            		break;
 
-                        hl7.append("OBR|1|");
-                        if (fields.length > 2) hl7.append(fields[2]);
-                        hl7.append("||");
-
-                        if (fields.length > 4) hl7.append(fields[4]);
-                        hl7.append("\r");
-                        break;
-
-                    case "R":
-                        hl7.append("OBX|").append(obxIndex).append("|TX|");
-                        if (fields.length > 2) hl7.append(fields[2]);
-                        hl7.append("|");
-                        if (fields.length > 3) hl7.append(fields[3]);
-                        hl7.append("|||||||");
-                        hl7.append(fields.length > 11 ? fields[11] : "F").append("\r");
-                        obxIndex++;
-                        break;
-
-                    case "C":
-                        hl7.append("NTE|1|L|").append(
-                            String.join(" ", Arrays.copyOfRange(fields, 1, fields.length))
-                        ).append("\r");
-                        break;
-                }
+            	case "C":
+            		hl7.append("NTE|1|L|").append(
+            				String.join(" ", Arrays.copyOfRange(fields, 1, fields.length))
+            				).append("\r");
+            		break;
+            	}
             }
 
             return hl7.toString();
@@ -779,7 +779,16 @@ public class AnalyzerGeneXpert implements Analyzer {
             outputStream.write(ENQ);
             outputStream.flush();
 
-            int response = inputStream.read();
+            socket.setSoTimeout(10000);
+            int response;
+            try {
+                socket.setSoTimeout(10000);
+                response = inputStream.read();
+            } catch (SocketTimeoutException e) {
+                logger.warn("Timeout waiting for ACK after ENQ (10s)");
+                return "ERROR";
+            }
+            
             if (response == ACK) {
                 logger.info("<<< Response: ACK");
             } else if (response == NAK) {
@@ -799,10 +808,9 @@ public class AnalyzerGeneXpert implements Analyzer {
                 frame.write(ETX);
 
                 int checksum = 0;
-                for (int j = 1; j < frame.size(); j++) {
-                    checksum += frame.toByteArray()[j];
-                }
-                checksum = checksum & 0xFF;
+                for (byte b : bodyBytes) checksum += (b & 0xFF);
+                checksum += ETX;
+                checksum &= 0xFF;
                 String checksumStr = String.format("%02X", checksum);
 
                 frame.write(checksumStr.getBytes(StandardCharsets.US_ASCII));
@@ -813,7 +821,16 @@ public class AnalyzerGeneXpert implements Analyzer {
                 outputStream.write(frame.toByteArray());
                 outputStream.flush();
 
-                int frameResp = inputStream.read();
+                socket.setSoTimeout(10000);
+                int frameResp;
+                try {
+                    socket.setSoTimeout(10000);
+                    frameResp = inputStream.read();
+                } catch (SocketTimeoutException e) {
+                    logger.warn("Timeout waiting for ACK after frame " + (i + 1) + " (10s)");
+                    return "ERROR";
+                }
+                
                 if (frameResp == ACK) {
                     logger.info("<<< Response: ACK");
                 } else if (frameResp == NAK) {
@@ -829,7 +846,7 @@ public class AnalyzerGeneXpert implements Analyzer {
             outputStream.write(EOT);
             outputStream.flush();
 
-            return "ACK"; // if all went well
+            return "ACK";
 
         } catch (IOException e) {
             logger.error("ASTM send error: " + e.getMessage());
@@ -854,56 +871,70 @@ public class AnalyzerGeneXpert implements Analyzer {
      */
     @Override
     public void listenDevice() {
-        logger.info("DEBUG: this.type_cnx = " + this.type_cnx);
-        logger.info("DEBUG: this.mode = " + this.mode);
-        logger.info("Connecting to analyzer at " + ip_analyzer + ":" + port_analyzer);
+    	logger.info("DEBUG: this.type_cnx = " + this.type_cnx);
+    	logger.info("DEBUG: this.mode = " + this.mode);
+    	logger.info("Connecting to analyzer at " + ip_analyzer + ":" + port_analyzer);
 
-        if ("socket_E1381".equalsIgnoreCase(this.type_cnx)) {
-            new Thread(() -> {
-                int backoffTime = 5000; // Initial delay (5s)
-                int maxBackoffTime = 60000; // Max delay (1 min)
+    	if (!"socket_E1381".equalsIgnoreCase(this.type_cnx) && !"socket".equalsIgnoreCase(this.type_cnx)) {
+    		logger.info("Unsupported connection type: " + type_cnx);
+    		this.listening.set(false);
+    		return;
+    	}
 
-                while (true) {
-                    try {
-                        if ("client".equalsIgnoreCase(this.mode)) {
-                            logger.info("Starting ASTM client mode...");
-                            connectAsClient();
-                        } else {
-                            logger.info("Starting ASTM server mode...");
-                            startASTMServer();
-                        }
+    	Thread mainListener = new Thread(() -> {
+    		if ("client".equalsIgnoreCase(this.mode)) {
+    			logger.info("Starting ASTM client mode...");
 
-                        if (socket == null || socket.isClosed()) {
-                            throw new IOException("Connection could not be established.");
-                        }
+    			int backoffDelayMs = 5000;   // initial 5s
+    			final int backoffMaxMs = 60000;  // cap 60s
 
-                        this.listening.set(true);
-                        backoffTime = 5000; // Reset backoff after successful connection
-                        logger.info("DEBUG: listenDevice() successfully started.");
+    			while (true) {
+    				try {
+    					// Step 3: open socket
+    					connectAsClient();
 
-                        listenForIncomingMessages();
+    					// >>> reset backoff on successful (re)connect
+    					backoffDelayMs = 5000;
 
-                        while (this.listening.get()) {
-                            if (socket == null || socket.isClosed()) {
-                                logger.info("Connection lost, attempting reconnection...");
-                                reconnectSocket();
-                                logger.info("Waiting " + backoffTime + "ms before next reconnection attempt...");
-                                Thread.sleep(backoffTime);
-                                backoffTime = Math.min(backoffTime * 2, maxBackoffTime);
-                            }
-                            Thread.sleep(5000);
-                        }
+    					// Step 4: run E1381 FSM (blocks until socket closed or I/O error)
+    					this.listening.set(true);
+    					listenForIncomingMessages();
 
-                    } catch (IOException | InterruptedException e) {
-                        logger.error("ERROR: " + e.getMessage());
-                        this.listening.set(false);
-                    }
-                }
-            }).start();
-        } else {
-            logger.info("Unsupported connection type: " + type_cnx);
-            this.listening.set(false);
-        }
+    					// Step 5: FSM returned => we'll try to reconnect
+    					logger.warn("Client FSM ended; will attempt to reconnect.");
+
+    				} catch (IOException ioEx) {
+    					// Step 6: connection/open failure
+    					logger.error("Client I/O error: " + ioEx.getMessage(), ioEx);
+
+    				} finally {
+    					// Step 7: ensure socket is closed and clear state
+    					this.listening.set(false);
+    					try { if (socket != null && !socket.isClosed()) socket.close(); } catch (IOException ignore) {}
+    					socket = null;
+    					inputStream = null;
+    					outputStream = null;
+    				}
+
+    				// Step 8: wait before next attempt (exponential backoff)
+    				try { Thread.sleep(backoffDelayMs); } catch (InterruptedException ie) {
+    					Thread.currentThread().interrupt();
+    					logger.warn("Reconnect loop interrupted; stopping client mode.");
+    					break;
+    				}
+
+    				// >>> No Step 9: reconnectSocket();  // not needed, Step 3 will (re)connect
+    				backoffDelayMs = Math.min(backoffDelayMs * 2, backoffMaxMs);
+    			}
+    		} else {
+    			// Step 1: Start ASTM server (blocking accept loop; per-connection threads run the FSM)
+    			logger.info("Starting ASTM server mode...");
+    			startASTMServer(); // never returns
+    		}
+    	});
+    	mainListener.setName("AnalyzerGeneXpert-MainListener");
+    	mainListener.setDaemon(true); // "daemon"
+    	mainListener.start();
     }
 
     /**
@@ -929,100 +960,41 @@ public class AnalyzerGeneXpert implements Analyzer {
     private void startASTMServer() {
         while (true) {
             try (ServerSocket serverSocket = new ServerSocket(port_analyzer)) {
-                logger.info("ASTM Server started on port " + port_analyzer);
+                logger.info("ASTM Server started on port {}", port_analyzer);
 
                 while (true) {
                     try {
-                        // Wait for incoming client connection
-                        Socket clientSocket = serverSocket.accept();
-                        logger.info("Accepted connection from " + clientSocket.getInetAddress());
+                        final Socket acceptedSocket = serverSocket.accept();
+                        logger.info("Accepted connection from {}", acceptedSocket.getInetAddress());
 
-                        // Handle each client connection in a separate thread
-                        new Thread(() -> handleClientConnection(clientSocket)).start();
+                        try (Socket clientSocket = serverSocket.accept()) {
+                            logger.info("Accepted connection from {}", clientSocket.getInetAddress());
+                            this.socket = clientSocket;
+                            this.inputStream = clientSocket.getInputStream();
+                            this.outputStream = clientSocket.getOutputStream();
+                            this.listening.set(true);
+                            listenForIncomingMessages();
+                        } catch (IOException ioEx) {
+                            logger.error("ERROR: Client handling failed: {}", ioEx.getMessage(), ioEx);
+                        } finally {
+                            this.listening.set(false);
+                            this.socket = null; this.inputStream = null; this.outputStream = null;
+                            logger.info("Client connection closed.");
+                        }                       
 
-                    } catch (IOException e) {
-                        logger.error("ERROR: Failed to accept client connection: " + e.getMessage());
+                    } catch (IOException acceptEx) {
+                        logger.error("ERROR: Failed to accept client connection: {}", acceptEx.getMessage());
                     }
                 }
-            } catch (IOException e) {
-                logger.error("ERROR: Failed to start ASTM server on port " + port_analyzer + ": " + e.getMessage());
-                logger.info("Retrying in 10 seconds...");
-                try {
-                    Thread.sleep(10000); // Wait 10 seconds before retrying
-                } catch (InterruptedException ie) {
+            } catch (IOException startEx) {
+                logger.error("ERROR: Failed to start ASTM server on port {}: {}", port_analyzer, startEx.getMessage());
+                logger.info("Retrying in 10000 ms...");
+                try { Thread.sleep(10000); } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
                     logger.error("ERROR: Server retry interrupted.");
                     break;
                 }
             }
-        }
-    }
-    
-    /**
-     * Handles a single incoming socket connection from an analyzer in ASTM server mode.
-     * Reads the inbound message (ASTM or HL7 via MLLP), processes it via the appropriate
-     * LAB transaction handler, and returns a response over the same socket.
-     *
-     * For ASTM messages, the response is returned as-is (no framing).
-     * For HL7 messages, the response is wrapped using MLLP before sending.
-     *
-     * @param clientSocket The socket connected to the analyzer
-     */
-    private void handleClientConnection(Socket clientSocket) {
-        try (InputStream clientInputStream = clientSocket.getInputStream();
-             OutputStream clientOutputStream = clientSocket.getOutputStream()) {
-
-            // Read incoming message from analyzer
-            String receivedMessage = Connect_util.readMLLPMessage(clientInputStream);
-            if (!receivedMessage.isEmpty()) {
-                logger.info("Received message from analyzer:\n" + receivedMessage.replace("\r", "\n"));
-
-                // Route the message through the appropriate handler
-                String response = processAnalyzerMsg(receivedMessage);
-
-                // Return response only if non-null and non-empty
-                if (response != null && !response.isEmpty()) {
-                    logger.info("Preparing response to analyzer:\n" + response.replace("\r", "\n"));
-
-                    // Determine if ASTM or HL7 response
-                    boolean isASTM = receivedMessage.trim().startsWith("H|");
-
-                    // Send response without MLLP wrapping if ASTM, else wrap HL7 with MLLP
-                    byte[] outputBytes = isASTM
-                        ? response.getBytes(StandardCharsets.US_ASCII)
-                        : Connect_util.encapsulateHL7Message(response).getBytes(StandardCharsets.UTF_8);
-
-                    clientOutputStream.write(outputBytes);
-                    clientOutputStream.flush();
-
-                    logger.info("Response sent successfully to analyzer.");
-                } else {
-                    logger.warn("WARNING: No response generated to send to analyzer.");
-                }
-            }
-
-        } catch (IOException e) {
-            logger.error("ERROR: Failed to process incoming analyzer message: " + e.getMessage());
-        } finally {
-            try {
-                clientSocket.close();
-            } catch (IOException e) {
-                logger.error("ERROR: Failed to close analyzer socket: " + e.getMessage());
-            }
-        }
-    }
-    
-    /**
-     * Attempts to reconnect the socket connection.
-     */
-    private void reconnectSocket() {
-        try {
-            if (socket != null && !socket.isClosed()) {
-                socket.close();
-            }
-            connectAsClient();
-        } catch (IOException e) {
-            logger.error("ERROR: Reconnection failed: " + e.getMessage());
         }
     }
     
@@ -1056,117 +1028,127 @@ public class AnalyzerGeneXpert implements Analyzer {
      * This method is blocking and runs in a dedicated thread while `listening` is true.
      */
     private void listenForIncomingMessages() {
-        while (this.listening.get()) {
+    	while (this.listening.get()) {
             try {
-                if (this.inputStream.available() == 0) {
-                    Thread.sleep(500); // Avoid busy-waiting
-                    logger.trace("No data available on socket — waiting...");
-                    continue;
-                }
-                
-                socket.setSoTimeout(10000);
-
-                // Step 1: Wait for ENQ
-                int byteRead = inputStream.read();
-                if (byteRead == -1) {
-                    logger.info("Stream closed by peer (ENQ check). Exiting listener.");
+            	// Step 1: Blocking wait for ENQ (with socket timeout)
+                socket.setSoTimeout(15000); // 15 seconds
+                int firstByte = inputStream.read();
+                if (firstByte == -1) {
+                    logger.info("Stream closed by peer during ENQ wait. Exiting listener.");
                     this.listening.set(false);
                     break;
                 }
-                
-                logger.info("<<< DEBUG BYTE 0x{} ({})", String.format("%02X", byteRead), printable(byteRead));
-                
-                if (byteRead != ENQ) {
-                    logger.warn("Expected ENQ but received: " + byteRead);
-                    continue;
+
+                logger.info("<<< DEBUG BYTE 0x{} ({})", String.format("%02X", firstByte), printable(firstByte));
+                if (firstByte != ENQ) {
+                    logger.warn("Expected ENQ but received: {}", printable(firstByte));
+                    continue; // keep waiting for a proper ENQ
                 }
 
-                logger.info("<<< Received ENQ");
+                // Step 2: Send ACK to ENQ to start frame reception
                 outputStream.write(ACK);
                 outputStream.flush();
-                logger.info(">>> Sent ACK [0x06]");
+                logger.info(">>> Sent ACK [0x06] in response to ENQ");
 
-                // Step 2: Read frames until EOT
-                ByteArrayOutputStream msgBuffer = new ByteArrayOutputStream();
+                // Step 3: Receive frames until EOT (validate checksum and ACK/NAK each frame)
+                ByteArrayOutputStream assembledMessage = new ByteArrayOutputStream();
 
                 while (true) {
-                    int start = inputStream.read();
-                    
-                    logger.info("<<< DEBUG BYTE 0x{} ({})", String.format("%02X", start), printable(start));
+                    int frameStartByte = inputStream.read();
+                    if (frameStartByte == -1) {
+                        throw new IOException("Stream closed while waiting for STX/EOT");
+                    }
 
-                    
-                    if (start == EOT) {
+                    logger.info("<<< DEBUG BYTE 0x{} ({})", String.format("%02X", frameStartByte), printable(frameStartByte));
+
+                    // Step 3.1: End of transmission?
+                    if (frameStartByte == EOT) {
                         logger.info("<<< Received EOT — message transmission complete");
                         break;
                     }
 
-                    if (start != STX) {
-                        logger.warn("Expected STX but got: " + start);
-                        continue;
+                    // Step 3.2: Expect STX to start a frame
+                    if (frameStartByte != STX) {
+                        logger.warn("Expected STX but got: {}", printable(frameStartByte));
+                        continue; // ignore noise and keep reading
                     }
 
-                    ByteArrayOutputStream frameBuf = new ByteArrayOutputStream();
-                    int data;
-                    while ((data = inputStream.read()) != ETX) {
-                        frameBuf.write(data);
+                    // Step 3.3: Read frame payload until ETX
+                    ByteArrayOutputStream framePayload = new ByteArrayOutputStream();
+                    int byteReadInFrame;
+                    while ((byteReadInFrame = inputStream.read()) != ETX) {
+                        if (byteReadInFrame == -1) {
+                            throw new IOException("Stream closed inside frame before ETX");
+                        }
+                        framePayload.write(byteReadInFrame);
                     }
 
-                    int checksumByte1 = inputStream.read();
-                    int checksumByte2 = inputStream.read();
-                    inputStream.read(); // CR
-                    inputStream.read(); // LF
+                    // Step 3.4: Read checksum (2 ASCII hex), then CR LF
+                    int checksumHigh = inputStream.read();
+                    int checksumLow  = inputStream.read();
+                    int crByte       = inputStream.read();
+                    int lfByte       = inputStream.read();
 
-                    // Checksum calculation
-                    String receivedChecksum = "" + (char) checksumByte1 + (char) checksumByte2;
-                    int calculatedChecksum = 0;
-                    byte[] frameBytes = frameBuf.toByteArray();
-                    for (byte b : frameBytes) {
-                        calculatedChecksum += b;
+                    if (checksumHigh < 0 || checksumLow < 0 || crByte < 0 || lfByte < 0) {
+                        throw new IOException("Incomplete trailer after ETX (checksum/CR/LF missing)");
                     }
-                    calculatedChecksum += ETX; // Include ETX in checksum
-                    calculatedChecksum &= 0xFF;
-                    String expectedChecksum = String.format("%02X", calculatedChecksum);
 
+                    String receivedChecksum = "" + (char) checksumHigh + (char) checksumLow;
+
+                    // Step 3.5: Compute expected checksum (sum of all bytes from payload + ETX, modulo 256)
+                    int checksumAccumulator = 0;
+                    byte[] payloadBytes = framePayload.toByteArray();
+                    for (byte pb : payloadBytes) checksumAccumulator += pb;
+                    checksumAccumulator += ETX; // ETX included in checksum per E1381
+                    checksumAccumulator &= 0xFF;
+                    String expectedChecksum = String.format("%02X", checksumAccumulator);
+
+                    // Step 3.6: ACK/NAK depending on checksum
                     if (!receivedChecksum.equalsIgnoreCase(expectedChecksum)) {
                         logger.warn("Checksum mismatch: expected {} but got {}", expectedChecksum, receivedChecksum);
                         outputStream.write(NAK);
                         outputStream.flush();
+                        // continue waiting for a retransmission of the same frame
                         continue;
                     } else {
                         outputStream.write(ACK);
                         outputStream.flush();
                     }
 
-                    String frameStr = new String(frameBytes, StandardCharsets.US_ASCII);
-                    msgBuffer.write(frameStr.getBytes(StandardCharsets.US_ASCII));
-                    msgBuffer.write('\r');
+                    // Step 3.7: Append frame payload to the complete ASTM message (CR as segment delimiter)
+                    assembledMessage.write(payloadBytes);
+                    if (payloadBytes.length == 0 || payloadBytes[payloadBytes.length - 1] != '\r') {
+                        assembledMessage.write('\r'); // ensure single CR delimiter
+                    }
                 }
 
-                String receivedMessage = msgBuffer.toString(StandardCharsets.US_ASCII).trim();
-                if (receivedMessage.isEmpty()) {
+                // Step 4: Build the multi-line ASTM message and route to LAB-27/LAB-29 logic
+                String astmMessage = assembledMessage.toString(StandardCharsets.US_ASCII).trim();
+                if (astmMessage.isEmpty()) {
                     logger.warn("Empty ASTM message received — ignored.");
                     continue;
                 }
 
-                logger.info("DEBUG: Complete ASTM message:\n{}", receivedMessage.replace("\r", "\n"));
+                logger.info("DEBUG: Complete ASTM message:\n{}", astmMessage.replace("\r", "\n"));
 
-                // Step 3: Process the message and send response if needed
-                String responseMessage = processAnalyzerMsg(receivedMessage);
+                // Step 5: Process message; if a response is produced, perform ASTM turnaround (sendASTMMessage)
+                String responseMessage = processAnalyzerMsg(astmMessage);
                 if (responseMessage != null && !responseMessage.isEmpty()) {
-                    logger.info(">>> Sending ASTM response:\n" + responseMessage.replace("\r", "\n"));
-
-                    String[] responseLines = responseMessage.split("\r|\n");
-                    sendASTMMessage(responseLines);
+                    logger.info(">>> Sending ASTM response (turnaround):\n{}", responseMessage.replace("\r", "\n"));
+                    String[] responseLines = responseMessage.replaceAll("[\\u000d\\u000a]+", "\n").split("\n");
+                    sendASTMMessage(responseLines); // ENQ → ACK → frames → EOT
                 } else {
                     logger.warn("No response generated for received ASTM message.");
                 }
 
-            } catch (SocketTimeoutException e) {
-                logger.warn("No data received in 10 seconds — continuing to wait...");
+            } catch (SocketTimeoutException timeoutEx) {
+                // Step 6: Timeout waiting for bytes — keep the listener alive
+                logger.warn("No data received within 15000 ms — continuing to wait...");
                 continue;
-            } catch (IOException | InterruptedException e) {
+            } catch (IOException ioEx) {
+                // Step 7: Fatal I/O error — stop listening on this socket
                 this.listening.set(false);
-                logger.error("Exception in listenForIncomingMessages (ASTM): " + e.getMessage(), e);
+                logger.error("Exception in listenForIncomingMessages (ASTM): {}", ioEx.getMessage(), ioEx);
             }
         }
     }
@@ -1216,6 +1198,7 @@ public class AnalyzerGeneXpert implements Analyzer {
     public static String readASTMMessage(InputStream inputStream) throws IOException {
         ByteArrayOutputStream buffer = new ByteArrayOutputStream();
         int byteRead;
+        int lastPayloadByte = -1;
 
         boolean inFrame = false;
 
@@ -1225,6 +1208,7 @@ public class AnalyzerGeneXpert implements Analyzer {
             }
             if (byteRead == 0x02) { // STX = Start of Text
                 inFrame = true;
+                lastPayloadByte = -1;
                 continue;
             }
             if (byteRead == 0x03) { // ETX = End of Text
@@ -1233,12 +1217,16 @@ public class AnalyzerGeneXpert implements Analyzer {
                 inputStream.read(); // Checksum byte 2
                 inputStream.read(); // CR
                 inputStream.read(); // LF
-                buffer.write('\r'); // ASTM segment delimiter
+                if (lastPayloadByte != '\r') { // ensure single CR delimiter
+                    buffer.write('\r');
+                }
                 inFrame = false;
+                lastPayloadByte = -1; // reset for next frame
                 continue;
             }
             if (inFrame) {
                 buffer.write(byteRead);
+                lastPayloadByte = byteRead;
             }
         }
 

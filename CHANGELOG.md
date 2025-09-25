@@ -3,6 +3,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.9.6] - 2025-09-25
+### Changed
+- include "socket" to type of connection (already accept socket_E1381)
+- thread processing
+
+## [0.9.5] - 2025-09-17
+### Added
+- server mode ASTM
+
 ## [0.9.4] - 2025-07-18
 ### Added
 - Added logging of all incoming bytes (hex + printable form) in listenForIncomingMessages() to help diagnose ASTM protocol-level issues.
