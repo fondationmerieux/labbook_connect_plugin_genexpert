@@ -3,6 +3,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.9.8] - 2025-10-21
+### Changed
+- Improved multi-frame (ETB) handling in ASTM reception.
+- Removed extra CR injection between frames.
+- Added fallback for non-HL7 upstream responses (return `L|1|N`).
+- Fixed server socket double accept.
+- Added ETB to printable logs.
+
+## [0.9.7] - 2025-10-13
+### Changed
+- modified listeForIncoming and include ETB caracter
+
 ## [0.9.6] - 2025-09-25
 ### Changed
 - include "socket" to type of connection (already accept socket_E1381)

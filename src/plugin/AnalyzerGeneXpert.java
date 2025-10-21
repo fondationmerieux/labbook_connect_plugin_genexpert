@@ -51,7 +51,7 @@ public class AnalyzerGeneXpert implements Analyzer {
 	
 	private static final Logger logger = LoggerFactory.getLogger(AnalyzerGeneXpert.class); // Uses Connect's logback.xml
 	
-	private final String jar_version = "0.9.6";
+	private final String jar_version = "0.9.8";
 
     // === General Configuration ===
     protected String version = "";
@@ -83,7 +83,7 @@ public class AnalyzerGeneXpert implements Analyzer {
     private static final byte ETX = 0x03;
     private static final byte CR = 0x0D;
     private static final byte LF = 0x0A;
-
+    private static final byte ETB = 0x17; // End of Transmission Block (multi-frame continuation)
     
     /**
      * Default constructor.
@@ -353,6 +353,12 @@ public class AnalyzerGeneXpert implements Analyzer {
 
             // Send HL7 message to LabBook and get the HL7 ACK response
             String hl7Ack = Connect_util.send_hl7_msg(this, this.url_upstream_lab29, hl7Message);
+
+            if (hl7Ack == null || !hl7Ack.startsWith("MSH|")) {
+                logger.error("Lab29 GeneXpert : upstream returned non-HL7 or null; returning ASTM NACK. First 80 chars: {}",
+                             hl7Ack != null ? hl7Ack.substring(0, Math.min(80, hl7Ack.length())) : "null");
+                return "L|1|N";
+            }
             logger.info("Lab29 GeneXpert : HL7 ACK from LabBook:\n" + hl7Ack.replace("\r", "\n"));
 
             // Convert HL7 ACK back to a minimal ASTM acknowledgment
@@ -606,6 +612,11 @@ public class AnalyzerGeneXpert implements Analyzer {
      */
     public String convertACKtoASTM(String hl7Ack) {
         try {
+        	if (hl7Ack == null || !hl7Ack.startsWith("MSH|")) {
+                logger.error("convertACKtoASTM: Non-HL7 response (no MSH).");
+                return "L|1|N";
+            }
+        	
             PipeParser parser = new PipeParser();
             Message ackMsg = parser.parse(hl7Ack);
 
@@ -963,27 +974,19 @@ public class AnalyzerGeneXpert implements Analyzer {
                 logger.info("ASTM Server started on port {}", port_analyzer);
 
                 while (true) {
-                    try {
-                        final Socket acceptedSocket = serverSocket.accept();
-                        logger.info("Accepted connection from {}", acceptedSocket.getInetAddress());
-
-                        try (Socket clientSocket = serverSocket.accept()) {
-                            logger.info("Accepted connection from {}", clientSocket.getInetAddress());
-                            this.socket = clientSocket;
-                            this.inputStream = clientSocket.getInputStream();
-                            this.outputStream = clientSocket.getOutputStream();
-                            this.listening.set(true);
-                            listenForIncomingMessages();
-                        } catch (IOException ioEx) {
-                            logger.error("ERROR: Client handling failed: {}", ioEx.getMessage(), ioEx);
-                        } finally {
-                            this.listening.set(false);
-                            this.socket = null; this.inputStream = null; this.outputStream = null;
-                            logger.info("Client connection closed.");
-                        }                       
-
-                    } catch (IOException acceptEx) {
-                        logger.error("ERROR: Failed to accept client connection: {}", acceptEx.getMessage());
+                    try (Socket clientSocket = serverSocket.accept()) {
+                        logger.info("Accepted connection from {}", clientSocket.getInetAddress());
+                        this.socket = clientSocket;
+                        this.inputStream = clientSocket.getInputStream();
+                        this.outputStream = clientSocket.getOutputStream();
+                        this.listening.set(true);
+                        listenForIncomingMessages();
+                    } catch (IOException ioEx) {
+                        logger.error("ERROR: Client handling failed: {}", ioEx.getMessage(), ioEx);
+                    } finally {
+                        this.listening.set(false);
+                        this.socket = null; this.inputStream = null; this.outputStream = null;
+                        logger.info("Client connection closed.");
                     }
                 }
             } catch (IOException startEx) {
@@ -1016,122 +1019,135 @@ public class AnalyzerGeneXpert implements Analyzer {
             case 0x15: return "NAK";
             case 0x0D: return "CR";
             case 0x0A: return "LF";
+            case 0x17: return "ETB";
             default: return ".";
         }
     }
 
     /**
-     * Listens for incoming ASTM messages from the analyzer using ASTM E1381 framing.
-     * Handles ENQ handshake, receives frames until EOT, validates checksums,
-     * and sends ACK/NAK responses. Automatically dispatches messages to lab27/lab29 logic.
+     * Listens for incoming ASTM messages using ASTM E1381 framing.
+     * - STEP 1: Wait ENQ, reply ACK
+     * - STEP 2: Receive frames (STX, frame-no, payload, ETX|ETB, checksum[2], CR, LF)
+     * - STEP 3: Validate checksum on [frame-no + payload + (ETX|ETB)]
+     * - STEP 4: ACK/NAK each frame
+     * - STEP 5: On EOT, dispatch to LAB-27/LAB-29 and optionally turnaround reply
      *
-     * This method is blocking and runs in a dedicated thread while `listening` is true.
+     * Blocking; runs while `listening` is true.
      */
     private void listenForIncomingMessages() {
-    	while (this.listening.get()) {
+        while (this.listening.get()) {
             try {
-            	// Step 1: Blocking wait for ENQ (with socket timeout)
-                socket.setSoTimeout(15000); // 15 seconds
+                // STEP 1: Wait for ENQ (15s)
+                socket.setSoTimeout(15000);
                 int firstByte = inputStream.read();
                 if (firstByte == -1) {
                     logger.info("Stream closed by peer during ENQ wait. Exiting listener.");
                     this.listening.set(false);
                     break;
                 }
-
                 logger.info("<<< DEBUG BYTE 0x{} ({})", String.format("%02X", firstByte), printable(firstByte));
                 if (firstByte != ENQ) {
                     logger.warn("Expected ENQ but received: {}", printable(firstByte));
                     continue; // keep waiting for a proper ENQ
                 }
 
-                // Step 2: Send ACK to ENQ to start frame reception
+                // STEP 2: ACK the ENQ to start the transfer
                 outputStream.write(ACK);
                 outputStream.flush();
                 logger.info(">>> Sent ACK [0x06] in response to ENQ");
 
-                // Step 3: Receive frames until EOT (validate checksum and ACK/NAK each frame)
+                // STEP 3: Receive frames until EOT
                 ByteArrayOutputStream assembledMessage = new ByteArrayOutputStream();
 
+                framesLoop:
                 while (true) {
-                    int frameStartByte = inputStream.read();
-                    if (frameStartByte == -1) {
-                        throw new IOException("Stream closed while waiting for STX/EOT");
-                    }
+                    int b = inputStream.read();
+                    if (b == -1) throw new IOException("Stream closed while waiting for STX/EOT");
+                    logger.info("<<< DEBUG BYTE 0x{} ({})", String.format("%02X", b), printable(b));
 
-                    logger.info("<<< DEBUG BYTE 0x{} ({})", String.format("%02X", frameStartByte), printable(frameStartByte));
-
-                    // Step 3.1: End of transmission?
-                    if (frameStartByte == EOT) {
+                    // STEP 3.1: End of transmission?
+                    if (b == EOT) {
                         logger.info("<<< Received EOT — message transmission complete");
-                        break;
+                        break framesLoop;
                     }
 
-                    // Step 3.2: Expect STX to start a frame
-                    if (frameStartByte != STX) {
-                        logger.warn("Expected STX but got: {}", printable(frameStartByte));
+                    // STEP 3.2: Expect STX to begin a frame
+                    if (b != STX) {
+                        logger.warn("Expected STX or EOT, got: {}", printable(b));
                         continue; // ignore noise and keep reading
                     }
 
-                    // Step 3.3: Read frame payload until ETX
-                    ByteArrayOutputStream framePayload = new ByteArrayOutputStream();
-                    int byteReadInFrame;
-                    while ((byteReadInFrame = inputStream.read()) != ETX) {
-                        if (byteReadInFrame == -1) {
-                            throw new IOException("Stream closed inside frame before ETX");
-                        }
-                        framePayload.write(byteReadInFrame);
+                    // STEP 3.3: Read frame number (ASCII '0'..'7' typically)
+                    int frameNo = inputStream.read();
+                    if (frameNo < 0) throw new IOException("Frame aborted: missing frame number after STX");
+
+                    // STEP 3.4: Read payload up to ETX or ETB (terminator not included in payload)
+                    ByteArrayOutputStream frameContent = new ByteArrayOutputStream();
+                    int c;
+                    while (true) {
+                        c = inputStream.read();
+                        if (c < 0) throw new IOException("Frame aborted: stream closed before ETX/ETB");
+                        if (c == ETX || c == ETB) break; // end of text for this frame
+                        frameContent.write(c);
                     }
+                    byte terminator = (byte) c; // ETX (final) or ETB (more frames follow)
 
-                    // Step 3.4: Read checksum (2 ASCII hex), then CR LF
-                    int checksumHigh = inputStream.read();
-                    int checksumLow  = inputStream.read();
-                    int crByte       = inputStream.read();
-                    int lfByte       = inputStream.read();
-
-                    if (checksumHigh < 0 || checksumLow < 0 || crByte < 0 || lfByte < 0) {
-                        throw new IOException("Incomplete trailer after ETX (checksum/CR/LF missing)");
+                    // STEP 3.5: Read checksum (2 ASCII hex) + CR + LF
+                    int c1 = inputStream.read();
+                    int c2 = inputStream.read();
+                    int cr = inputStream.read();
+                    int lf = inputStream.read();
+                    if (c1 < 0 || c2 < 0 || cr < 0 || lf < 0) {
+                        throw new IOException("Incomplete trailer after ETX/ETB (checksum/CR/LF missing)");
                     }
+                    if (cr != CR || lf != LF) {
+                        throw new IOException(String.format("Invalid trailer bytes: CR=0x%02X LF=0x%02X", cr, lf));
+                    }
+                    String receivedChecksum = "" + (char) c1 + (char) c2;
 
-                    String receivedChecksum = "" + (char) checksumHigh + (char) checksumLow;
+                    // STEP 3.6: Compute checksum over [frameNo + payload + terminator]
+                    int sum = (frameNo & 0xFF);
+                    byte[] payloadBytes = frameContent.toByteArray();
+                    for (byte pb : payloadBytes) sum += (pb & 0xFF);
+                    sum += (terminator & 0xFF);
+                    sum &= 0xFF;
+                    String expectedChecksum = String.format("%02X", sum);
 
-                    // Step 3.5: Compute expected checksum (sum of all bytes from payload + ETX, modulo 256)
-                    int checksumAccumulator = 0;
-                    byte[] payloadBytes = framePayload.toByteArray();
-                    for (byte pb : payloadBytes) checksumAccumulator += pb;
-                    checksumAccumulator += ETX; // ETX included in checksum per E1381
-                    checksumAccumulator &= 0xFF;
-                    String expectedChecksum = String.format("%02X", checksumAccumulator);
-
-                    // Step 3.6: ACK/NAK depending on checksum
+                    // STEP 3.7: ACK/NAK the frame based on checksum validity
                     if (!receivedChecksum.equalsIgnoreCase(expectedChecksum)) {
                         logger.warn("Checksum mismatch: expected {} but got {}", expectedChecksum, receivedChecksum);
                         outputStream.write(NAK);
                         outputStream.flush();
-                        // continue waiting for a retransmission of the same frame
+                        // Wait for retransmission of the same frame; do not append to assembly
                         continue;
                     } else {
                         outputStream.write(ACK);
                         outputStream.flush();
                     }
 
-                    // Step 3.7: Append frame payload to the complete ASTM message (CR as segment delimiter)
+                    // STEP 3.8: Append frame payload into the assembled message (NO extra delimiter here)
+                    // The payload already contains CR between ASTM records; frames can split a record arbitrarily.
+                    // Do NOT inject CR here, or you will break records that continue in the next frame.
                     assembledMessage.write(payloadBytes);
-                    if (payloadBytes.length == 0 || payloadBytes[payloadBytes.length - 1] != '\r') {
-                        assembledMessage.write('\r'); // ensure single CR delimiter
-                    }
-                }
 
-                // Step 4: Build the multi-line ASTM message and route to LAB-27/LAB-29 logic
-                String astmMessage = assembledMessage.toString(StandardCharsets.US_ASCII).trim();
+                    // NOTE: If terminator == ETB, there will be continuation frames before EOT.
+                    // We keep looping: next expected bytes are STX ... until EOT arrives.
+                }
+                
+                // STEP 4: Build full ASTM message string
+                // Normalize assembled bytes to String; collapse CRLF to CR defensively.
+                byte[] assembled = assembledMessage.toByteArray();
+                String astmMessage = new String(assembled, StandardCharsets.US_ASCII)
+                        .replace("\r\n", "\r")
+                        .trim();
+
                 if (astmMessage.isEmpty()) {
                     logger.warn("Empty ASTM message received — ignored.");
                     continue;
                 }
-
                 logger.info("DEBUG: Complete ASTM message:\n{}", astmMessage.replace("\r", "\n"));
 
-                // Step 5: Process message; if a response is produced, perform ASTM turnaround (sendASTMMessage)
+                // STEP 5: Dispatch to LAB-27/LAB-29; if response produced, do ASTM turnaround send
                 String responseMessage = processAnalyzerMsg(astmMessage);
                 if (responseMessage != null && !responseMessage.isEmpty()) {
                     logger.info(">>> Sending ASTM response (turnaround):\n{}", responseMessage.replace("\r", "\n"));
@@ -1142,11 +1158,12 @@ public class AnalyzerGeneXpert implements Analyzer {
                 }
 
             } catch (SocketTimeoutException timeoutEx) {
-                // Step 6: Timeout waiting for bytes — keep the listener alive
+                // STEP 6: No byte received in the window — keep waiting
                 logger.warn("No data received within 15000 ms — continuing to wait...");
                 continue;
+
             } catch (IOException ioEx) {
-                // Step 7: Fatal I/O error — stop listening on this socket
+                // STEP 7: Fatal I/O — stop listening on this socket
                 this.listening.set(false);
                 logger.error("Exception in listenForIncomingMessages (ASTM): {}", ioEx.getMessage(), ioEx);
             }
