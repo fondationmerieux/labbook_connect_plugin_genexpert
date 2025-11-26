@@ -51,7 +51,7 @@ public class AnalyzerGeneXpert implements Analyzer {
 	
 	private static final Logger logger = LoggerFactory.getLogger(AnalyzerGeneXpert.class); // Uses Connect's logback.xml
 	
-	private final String jar_version = "0.9.8";
+	private final String jar_version = "0.9.9";
 
     // === General Configuration ===
     protected String version = "";
@@ -190,7 +190,7 @@ public class AnalyzerGeneXpert implements Analyzer {
     @Override
     public String info() {
         return String.format(
-            "Analyzer Info: [Jar=%s Version=%s, Version=%s, ID=%s, Lab27=%s, Lab29=%s, TypeCnx=%s, TypeMsg=%s, ArchiveMsg=%s, OperationMode=%s, Mode=%s, IP=%s, Port=%d]",
+            "Analyzer Info: [Jar=%s, Version=%s, ID=%s, Lab27=%s, Lab29=%s, TypeCnx=%s, TypeMsg=%s, ArchiveMsg=%s, OperationMode=%s, Mode=%s, IP=%s, Port=%d]",
             this.jar_version, this.version, this.id_analyzer, this.url_upstream_lab27, this.url_upstream_lab29,
             this.type_cnx, this.type_msg, this.archive_msg, this.operation_mode, this.mode, this.ip_analyzer, this.port_analyzer
         );
@@ -576,14 +576,31 @@ public class AnalyzerGeneXpert implements Analyzer {
                     break;
 
             	case "R":
-            		hl7.append("OBX|").append(obxIndex).append("|TX|");
-            		if (fields.length > 2) hl7.append(fields[2]); // observation identifier
-            		hl7.append("|");
-            		if (fields.length > 3) hl7.append(fields[3]); // value
-            		hl7.append("|||||||");
-            		hl7.append(fields.length > 11 ? fields[11] : "F").append("\r"); // status
-            		obxIndex++;
-            		break;
+            	    hl7.append("OBX|").append(obxIndex).append("|TX|");
+            	    if (fields.length > 2) {
+            	        hl7.append(fields[2]); // observation identifier
+            	    }
+            	    hl7.append("|");
+
+            	    String value = "";
+            	    if (fields.length > 3 && fields[3] != null) {
+            	        String raw = fields[3];
+            	        // Extract first non-empty component from ^-separated value
+            	        String[] comps = raw.split("\\^", -1);
+            	        for (String c : comps) {
+            	            if (c != null && !c.isEmpty()) {
+            	                value = c;
+            	                break;
+            	            }
+            	        }
+            	    }
+            	    value = value.trim();
+            	    hl7.append(value); // OBX-5
+
+            	    hl7.append("|||||||");
+            	    hl7.append(fields.length > 11 ? fields[11] : "F").append("\r"); // status
+            	    obxIndex++;
+            	    break;
 
             	case "C":
             		hl7.append("NTE|1|L|").append(
