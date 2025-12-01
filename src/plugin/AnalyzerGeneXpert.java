@@ -51,7 +51,7 @@ public class AnalyzerGeneXpert implements Analyzer {
 	
 	private static final Logger logger = LoggerFactory.getLogger(AnalyzerGeneXpert.class); // Uses Connect's logback.xml
 	
-	private final String jar_version = "0.9.9";
+	private final String jar_version = "0.9.10";
 
     // === General Configuration ===
     protected String version = "";
@@ -70,6 +70,7 @@ public class AnalyzerGeneXpert implements Analyzer {
 
     // === Runtime State ===
     protected AtomicBoolean listening = new AtomicBoolean(false);
+    private ServerSocket serverSocket;
     private Socket socket;
     private InputStream inputStream;
     private OutputStream outputStream;
@@ -553,54 +554,91 @@ public class AnalyzerGeneXpert implements Analyzer {
             		.append("||").append("\r");
             		break;
 
-            	case "O":
-                    // O: order/specimen identifier
-                    specimenId = (fields.length > 2) ? fields[2] : null;
+                case "O":
+                    // O: order/specimen identifier from ASTM
+                    specimenId = (fields.length > 2 && fields[2] != null) ? fields[2].trim() : "";
+                    logger.info("convertASTMtoOUL_R22: specimenId from ASTM O segment = '{}'", specimenId);
 
-                    // SPM should precede ORC/OBR in OUL^R22
+                    // SPM must carry the specimen ID in SPM-2 so LabBook can resolve the sample
                     hl7.append("SPM|1|")
-                       .append(specimenId != null ? specimenId : "")
+                       .append(specimenId)
                        .append("\r");
 
                     // ORC with placer order number = specimenId
                     hl7.append("ORC|RE|")
-                       .append(specimenId != null ? specimenId : "")
+                       .append(specimenId)
                        .append("\r");
 
                     // OBR with same placer order number; test code from O|5 if present
                     hl7.append("OBR|1|")
-                       .append(specimenId != null ? specimenId : "")
+                       .append(specimenId)
                        .append("||");
-                    if (fields.length > 4) hl7.append(fields[4]); // ^^^code^text^ver
+                    if (fields.length > 4 && fields[4] != null) {
+                        hl7.append(fields[4]); // ^^^code^text^ver
+                    }
                     hl7.append("\r");
                     break;
 
-            	case "R":
-            	    hl7.append("OBX|").append(obxIndex).append("|TX|");
-            	    if (fields.length > 2) {
-            	        hl7.append(fields[2]); // observation identifier
-            	    }
-            	    hl7.append("|");
+                case "R":
+                    // ASTM R fields:
+                    // 0: "R"
+                    // 1: sequence
+                    // 2: test id (maps to OBX-3)
+                    // 3: result value (may start with '^')
+                    // 4: units
+                    // 5: reference range
+                    // 6: abnormal flags (ignored)
+                    // 7: nature of abnormal test (ignored)
+                    // 8: status (F, P, etc.)
+                    hl7.append("OBX|").append(obxIndex).append("|TX|");
+                    if (fields.length > 2) {
+                        hl7.append(fields[2]); // OBX-3
+                    }
+                    hl7.append("||"); // OBX-4 empty
 
-            	    String value = "";
-            	    if (fields.length > 3 && fields[3] != null) {
-            	        String raw = fields[3];
-            	        // Extract first non-empty component from ^-separated value
-            	        String[] comps = raw.split("\\^", -1);
-            	        for (String c : comps) {
-            	            if (c != null && !c.isEmpty()) {
-            	                value = c;
-            	                break;
-            	            }
-            	        }
-            	    }
-            	    value = value.trim();
-            	    hl7.append(value); // OBX-5
+                    // OBX-5: value
+                    String value = "";
+                    if (fields.length > 3 && fields[3] != null) {
+                        String raw = fields[3];
+                        String[] comps = raw.split("\\^", -1);
+                        for (String c : comps) {
+                            if (c != null && !c.isEmpty()) {
+                                value = c;
+                                break;
+                            }
+                        }
+                    }
+                    value = value.trim();
 
-            	    hl7.append("|||||||");
-            	    hl7.append(fields.length > 11 ? fields[11] : "F").append("\r"); // status
-            	    obxIndex++;
-            	    break;
+                    // OBX-6: units
+                    String units = "";
+                    if (fields.length > 4 && fields[4] != null) {
+                        units = fields[4].trim();
+                    }
+
+                    // OBX-7: reference range
+                    String refRange = "";
+                    if (fields.length > 5 && fields[5] != null) {
+                        refRange = fields[5].trim();
+                    }
+
+                    // OBX-11: status (we will place it in field 11)
+                    String status = "F";
+                    if (fields.length > 8 && fields[8] != null && !fields[8].trim().isEmpty()) {
+                        status = fields[8].trim();
+                    }
+
+                    // OBX-5 value, OBX-6 units, OBX-7 reference range
+                    hl7.append(value)
+                       .append("|").append(units)
+                       .append("|").append(refRange)
+                       .append("|||"); // OBX-8, OBX-9, OBX-10 empty
+
+                    // OBX-11: result status
+                    hl7.append(status).append("\r");
+
+                    obxIndex++;
+                    break;
 
             	case "C":
             		hl7.append("NTE|1|L|").append(
@@ -916,7 +954,8 @@ public class AnalyzerGeneXpert implements Analyzer {
     			int backoffDelayMs = 5000;   // initial 5s
     			final int backoffMaxMs = 60000;  // cap 60s
 
-    			while (true) {
+    			this.listening.set(true);
+    			while (this.listening.get()) {
     				try {
     					// Step 3: open socket
     					connectAsClient();
@@ -986,9 +1025,11 @@ public class AnalyzerGeneXpert implements Analyzer {
      * Starts an ASTM server that listens for incoming ASTM messages.
      */
     private void startASTMServer() {
-        while (true) {
-            try (ServerSocket serverSocket = new ServerSocket(port_analyzer)) {
-                logger.info("ASTM Server started on port {}", port_analyzer);
+    	this.listening.set(true);
+        while (this.listening.get()) {
+            try {
+            	this.serverSocket = new ServerSocket(this.port_analyzer);
+                logger.info("ASTM Server started on port {}", this.port_analyzer);
 
                 while (true) {
                     try (Socket clientSocket = serverSocket.accept()) {
@@ -996,23 +1037,31 @@ public class AnalyzerGeneXpert implements Analyzer {
                         this.socket = clientSocket;
                         this.inputStream = clientSocket.getInputStream();
                         this.outputStream = clientSocket.getOutputStream();
-                        this.listening.set(true);
                         listenForIncomingMessages();
                     } catch (IOException ioEx) {
                         logger.error("ERROR: Client handling failed: {}", ioEx.getMessage(), ioEx);
                     } finally {
-                        this.listening.set(false);
-                        this.socket = null; this.inputStream = null; this.outputStream = null;
+                        this.socket = null; 
+                        this.inputStream = null; 
+                        this.outputStream = null;                        
                         logger.info("Client connection closed.");
                     }
                 }
             } catch (IOException startEx) {
-                logger.error("ERROR: Failed to start ASTM server on port {}: {}", port_analyzer, startEx.getMessage());
-                logger.info("Retrying in 10000 ms...");
-                try { Thread.sleep(10000); } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
-                    logger.error("ERROR: Server retry interrupted.");
-                    break;
+                this.listening.set(false);
+                try { if (this.socket != null) this.socket.close(); } catch (IOException ignore) {}
+                this.socket = null;
+                logger.error("ERROR: Failed to start ASTM server on port {}: {}", this.port_analyzer, startEx.getMessage());
+                break;
+            } finally {
+                try {
+                    if (this.serverSocket != null && !this.serverSocket.isClosed()) {
+                        this.serverSocket.close();
+                    }
+                } catch (IOException e) {
+                    logger.warn("Error while closing serverSocket in finally: " + e.getMessage(), e);
+                } finally {
+                    this.serverSocket = null;
                 }
             }
         }
@@ -1052,7 +1101,8 @@ public class AnalyzerGeneXpert implements Analyzer {
      * Blocking; runs while `listening` is true.
      */
     private void listenForIncomingMessages() {
-        while (this.listening.get()) {
+    	// Loop while the socket is alive; per-connection FSM
+        while (socket != null && !socket.isClosed()) {
             try {
                 // STEP 1: Wait for ENQ (15s)
                 socket.setSoTimeout(15000);
@@ -1181,7 +1231,7 @@ public class AnalyzerGeneXpert implements Analyzer {
 
             } catch (IOException ioEx) {
                 // STEP 7: Fatal I/O — stop listening on this socket
-                this.listening.set(false);
+            	this.listening.set(false);
                 logger.error("Exception in listenForIncomingMessages (ASTM): {}", ioEx.getMessage(), ioEx);
             }
         }
@@ -1271,6 +1321,33 @@ public class AnalyzerGeneXpert implements Analyzer {
         }
 
         return msg;
+    }
+    
+    @Override
+    public void stopListening() {
+    	this.listening.set(false);
+
+        try {
+            if (this.socket != null && !this.socket.isClosed()) {
+            	this.socket.close();
+            }
+        } catch (IOException e) {
+            logger.warn("stopListening: error while closing client socket: " + e.getMessage(), e);
+        } finally {
+        	this.socket = null;
+        	this.inputStream = null;
+        	this.outputStream = null;
+        }
+
+        try {
+            if (this.serverSocket != null && !this.serverSocket.isClosed()) {
+            	this.serverSocket.close();
+            }
+        } catch (IOException e) {
+            logger.warn("stopListening: error while closing server socket: " + e.getMessage(), e);
+        } finally {
+        	this.serverSocket = null;
+        }
     }
     
     // === utility function ===
@@ -1405,5 +1482,4 @@ public class AnalyzerGeneXpert implements Analyzer {
     private static boolean isBlank(String s) {
         return s == null || s.trim().isEmpty();
     }
-
 }

@@ -3,7 +3,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.9.10] - 2025-12-01
+### Fixed
+- Added proper server/client listening handling to prevent port binding issues and ensure clean reconnection.
+- Corrected ASTM → HL7 LAB-29 mapping: result values are now properly placed in OBX-5.
+- Fixed result parsing so values and units are stored correctly in LabBook.
+- Improved listener shutdown to ensure sockets are always released on restart.
+
 ## [0.9.9] - 2025-11-26
+### Fixed
 - Fixed GeneXpert ASTM R-segment parsing so OBX-5 contains the numeric result value
 
 ## [0.9.8] - 2025-10-21
