@@ -3,6 +3,10 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.9.11] - 2025-12-22
+### Added
+- Load LIVD-like mappings at startup and apply them (test/result codes, units, conversions) during ASTM→HL7 OUL^R22 conversion
+
 ## [0.9.10] - 2025-12-01
 ### Fixed
 - Added proper server/client listening handling to prevent port binding issues and ensure clean reconnection.

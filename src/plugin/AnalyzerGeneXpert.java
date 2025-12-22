@@ -18,6 +18,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.moandjiezana.toml.Toml;
+
 import ca.uhn.hl7v2.HL7Exception;
 import ca.uhn.hl7v2.parser.PipeParser;
 import ca.uhn.hl7v2.model.Group;
@@ -51,7 +53,7 @@ public class AnalyzerGeneXpert implements Analyzer {
 	
 	private static final Logger logger = LoggerFactory.getLogger(AnalyzerGeneXpert.class); // Uses Connect's logback.xml
 	
-	private final String jar_version = "0.9.10";
+	private final String jar_version = "0.9.11";
 
     // === General Configuration ===
     protected String version = "";
@@ -67,6 +69,9 @@ public class AnalyzerGeneXpert implements Analyzer {
     protected String mode = "";
     protected String ip_analyzer = "";
     protected int port_analyzer = 0;
+    protected String mappingPath = "";
+    protected Toml mappingToml = new Toml();
+
 
     // === Runtime State ===
     protected AtomicBoolean listening = new AtomicBoolean(false);
@@ -520,8 +525,8 @@ public class AnalyzerGeneXpert implements Analyzer {
      */
     public String convertASTMtoOUL_R22(String[] lines) {
         try {
-        	lines = stripASTMPrefixNumbers(lines);
-        	
+            lines = stripASTMPrefixNumbers(lines);
+
             StringBuilder hl7 = new StringBuilder();
 
             // === MSH (construit manuellement) ===
@@ -544,20 +549,53 @@ public class AnalyzerGeneXpert implements Analyzer {
             String specimenId = null;
             int obxIndex = 1;
 
-            for (String line : lines) {
-            	String[] fields = line.split("\\|", -1);
+            // Mapping context for the current order (O) to map subsequent results (R)
+            String currentTestName = "";
+            String currentLisTestCode = "";
 
-            	switch (fields[0]) {
-            	case "P":
-            		patientId = (fields.length > 2) ? fields[2] : null;
-            		hl7.append("PID|||").append(patientId != null ? patientId : "")
-            		.append("||").append("\r");
-            		break;
+            for (String line : lines) {
+                String[] fields = line.split("\\|", -1);
+
+                switch (fields[0]) {
+                case "P":
+                    patientId = (fields.length > 2) ? fields[2] : null;
+                    hl7.append("PID|||").append(patientId != null ? patientId : "")
+                       .append("||").append("\r");
+                    break;
 
                 case "O":
                     // O: order/specimen identifier from ASTM
                     specimenId = (fields.length > 2 && fields[2] != null) ? fields[2].trim() : "";
                     logger.info("convertASTMtoOUL_R22: specimenId from ASTM O segment = '{}'", specimenId);
+
+                    // Resolve test from mapping using O|5 (fields[4]) vendor test code
+                    String vendorTestCode = "";
+                    if (fields.length > 4 && fields[4] != null) {
+                        String[] comps = fields[4].split("\\^", -1);
+                        for (int i = comps.length - 1; i >= 0; i--) {
+                            String s = (comps[i] == null) ? "" : comps[i].trim();
+                            if (!s.isEmpty()) {
+                                vendorTestCode = s;
+                                break;
+                            }
+                        }
+                    }
+
+                    currentTestName = "";
+                    currentLisTestCode = "";
+                    List<Toml> tests = mappingToml.getTables("ivd_test");
+                    if (tests != null && !vendorTestCode.isEmpty()) {
+                        for (Toml t : tests) {
+                            String v = t.getString("vendor_test_code");
+                            if (v != null && v.trim().equals(vendorTestCode)) {
+                                String n = t.getString("name");
+                                String lis = t.getString("lis_test_code");
+                                currentTestName = (n == null) ? "" : n.trim();
+                                currentLisTestCode = (lis == null) ? "" : lis.trim();
+                                break;
+                            }
+                        }
+                    }
 
                     // SPM must carry the specimen ID in SPM-2 so LabBook can resolve the sample
                     hl7.append("SPM|1|")
@@ -569,11 +607,13 @@ public class AnalyzerGeneXpert implements Analyzer {
                        .append(specimenId)
                        .append("\r");
 
-                    // OBR with same placer order number; test code from O|5 if present
+                    // OBR with same placer order number; test code from mapping if found, otherwise from O|5
                     hl7.append("OBR|1|")
                        .append(specimenId)
                        .append("||");
-                    if (fields.length > 4 && fields[4] != null) {
+                    if (!currentLisTestCode.isEmpty()) {
+                        hl7.append("^^^").append(currentLisTestCode);
+                    } else if (fields.length > 4 && fields[4] != null) {
                         hl7.append(fields[4]); // ^^^code^text^ver
                     }
                     hl7.append("\r");
@@ -590,9 +630,48 @@ public class AnalyzerGeneXpert implements Analyzer {
                     // 6: abnormal flags (ignored)
                     // 7: nature of abnormal test (ignored)
                     // 8: status (F, P, etc.)
+
+                    String vendorResultCode = "";
+                    if (fields.length > 1 && fields[1] != null && !fields[1].trim().isEmpty()) {
+                        vendorResultCode = "R" + fields[1].trim();
+                    }
+
+                    String lisResultCode = "";
+                    String lisUnit = "";
+                    String convert = "none";
+                    double factor = 0.0;
+
+                    List<Toml> maps = mappingToml.getTables("ivd_mapping");
+                    if (maps != null && !currentTestName.isEmpty() && !vendorResultCode.isEmpty()) {
+                        for (Toml m : maps) {
+                            String t = m.getString("test");
+                            String vrc = m.getString("vendor_result_code");
+                            if (t != null && vrc != null
+                                    && t.trim().equals(currentTestName)
+                                    && vrc.trim().equals(vendorResultCode)) {
+
+                                String lrc = m.getString("lis_result_code");
+                                lisResultCode = (lrc == null) ? "" : lrc.trim();
+
+                                String lu = m.getString("lis_unit");
+                                lisUnit = (lu == null) ? "" : lu.trim();
+
+                                String cv = m.getString("convert");
+                                convert = (cv == null) ? "none" : cv.trim();
+
+                                Double f = m.getDouble("factor");
+                                factor = (f == null) ? 0.0 : f.doubleValue();
+
+                                break;
+                            }
+                        }
+                    }
+
                     hl7.append("OBX|").append(obxIndex).append("|TX|");
-                    if (fields.length > 2) {
-                        hl7.append(fields[2]); // OBX-3
+                    if (!lisResultCode.isEmpty()) {
+                        hl7.append(lisResultCode);
+                    } else if (fields.length > 2) {
+                        hl7.append(fields[2]); // OBX-3 (fallback)
                     }
                     hl7.append("||"); // OBX-4 empty
 
@@ -614,6 +693,45 @@ public class AnalyzerGeneXpert implements Analyzer {
                     String units = "";
                     if (fields.length > 4 && fields[4] != null) {
                         units = fields[4].trim();
+                    }
+
+                    // Override units from mapping if provided
+                    if (!lisUnit.isEmpty()) {
+                        units = lisUnit;
+                    }
+
+                    // Apply conversion if configured and value is numeric
+                    if (value != null) {
+                        String vtrim = value.trim();
+                        if (!vtrim.isEmpty() && !"none".equalsIgnoreCase(convert)) {
+                            try {
+                                double num = Double.parseDouble(vtrim.replace(",", "."));
+
+                                if ("multiply".equalsIgnoreCase(convert)) {
+                                    num = num * factor;
+                                    value = String.valueOf(num);
+                                } else if ("divide".equalsIgnoreCase(convert)) {
+                                    if (factor != 0.0) {
+                                        num = num / factor;
+                                        value = String.valueOf(num);
+                                    }
+                                } else if ("add".equalsIgnoreCase(convert)) {
+                                    num = num + factor;
+                                    value = String.valueOf(num);
+                                } else if ("subtract".equalsIgnoreCase(convert)) {
+                                    num = num - factor;
+                                    value = String.valueOf(num);
+                                } else if ("log10".equalsIgnoreCase(convert)) {
+                                    if (num > 0.0) {
+                                        num = Math.log10(num);
+                                        value = String.valueOf(num);
+                                    }
+                                }
+
+                            } catch (Exception e) {
+                                logger.info("convertASTMtoOUL_R22: non numeric value for conversion vendorResultCode={} value={}", vendorResultCode, vtrim);
+                            }
+                        }
                     }
 
                     // OBX-7: reference range
@@ -640,12 +758,12 @@ public class AnalyzerGeneXpert implements Analyzer {
                     obxIndex++;
                     break;
 
-            	case "C":
-            		hl7.append("NTE|1|L|").append(
-            				String.join(" ", Arrays.copyOfRange(fields, 1, fields.length))
-            				).append("\r");
-            		break;
-            	}
+                case "C":
+                    hl7.append("NTE|1|L|").append(
+                            String.join(" ", Arrays.copyOfRange(fields, 1, fields.length))
+                    ).append("\r");
+                    break;
+                }
             }
 
             return hl7.toString();
@@ -919,7 +1037,24 @@ public class AnalyzerGeneXpert implements Analyzer {
             return "ERROR";
         }
     }
+    
+    /**
+     * Gets the mapping configuration path.
+     * @return The mapping configuration path.
+     */
+    @Override
+    public String getMappingPath() {
+        return this.mappingPath;
+    }
 
+    /**
+     * Sets the mapping configuration path.
+     * @param mappingPath The mapping configuration path.
+     */
+    @Override
+    public void setMappingPath(String mappingPath) {
+        this.mappingPath = (mappingPath == null) ? "" : mappingPath.trim();
+    }
     
     /**
      * Starts the communication listener thread for the analyzer device.
@@ -940,6 +1075,8 @@ public class AnalyzerGeneXpert implements Analyzer {
     	logger.info("DEBUG: this.type_cnx = " + this.type_cnx);
     	logger.info("DEBUG: this.mode = " + this.mode);
     	logger.info("Connecting to analyzer at " + ip_analyzer + ":" + port_analyzer);
+    	
+    	this.mappingToml = Connect_util.loadMappingToml(this.getMappingPath());
 
     	if (!"socket_E1381".equalsIgnoreCase(this.type_cnx) && !"socket".equalsIgnoreCase(this.type_cnx)) {
     		logger.info("Unsupported connection type: " + type_cnx);
