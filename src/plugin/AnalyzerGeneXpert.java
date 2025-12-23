@@ -72,7 +72,6 @@ public class AnalyzerGeneXpert implements Analyzer {
     protected String mappingPath = "";
     protected Toml mappingToml = new Toml();
 
-
     // === Runtime State ===
     protected AtomicBoolean listening = new AtomicBoolean(false);
     private ServerSocket serverSocket;
@@ -185,6 +184,7 @@ public class AnalyzerGeneXpert implements Analyzer {
         newAnalyzer.setMode(this.mode);
         newAnalyzer.setIp_analyzer(this.ip_analyzer);
         newAnalyzer.setPort_analyzer(this.port_analyzer);
+        newAnalyzer.setMappingPath(this.mappingPath);
         return newAnalyzer;
     }
 
@@ -195,11 +195,11 @@ public class AnalyzerGeneXpert implements Analyzer {
     
     @Override
     public String info() {
-        return String.format(
-            "Analyzer Info: [Jar=%s, Version=%s, ID=%s, Lab27=%s, Lab29=%s, TypeCnx=%s, TypeMsg=%s, ArchiveMsg=%s, OperationMode=%s, Mode=%s, IP=%s, Port=%d]",
-            this.jar_version, this.version, this.id_analyzer, this.url_upstream_lab27, this.url_upstream_lab29,
-            this.type_cnx, this.type_msg, this.archive_msg, this.operation_mode, this.mode, this.ip_analyzer, this.port_analyzer
-        );
+    	return String.format(
+    			"Analyzer Info: [Jar=%s, Version=%s, ID=%s, Lab27=%s, Lab29=%s, TypeCnx=%s, TypeMsg=%s, ArchiveMsg=%s, MappingPath=%s, OperationMode=%s, Mode=%s, IP=%s, Port=%d]",
+    			this.jar_version, this.version, this.id_analyzer, this.url_upstream_lab27, this.url_upstream_lab29,
+    			this.type_cnx, this.type_msg, this.archive_msg, this.mappingPath, this.operation_mode, this.mode, this.ip_analyzer, this.port_analyzer
+    			);
     }
 
     @Override
