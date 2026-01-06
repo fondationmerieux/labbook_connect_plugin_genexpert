@@ -53,7 +53,7 @@ public class AnalyzerGeneXpert implements Analyzer {
 	
 	private static final Logger logger = LoggerFactory.getLogger(AnalyzerGeneXpert.class); // Uses Connect's logback.xml
 	
-	private final String jar_version = "0.9.11";
+	private final String jar_version = "0.9.12";
 
     // === General Configuration ===
     protected String version = "";
@@ -631,10 +631,7 @@ public class AnalyzerGeneXpert implements Analyzer {
                     // 7: nature of abnormal test (ignored)
                     // 8: status (F, P, etc.)
 
-                    String vendorResultCode = "";
-                    if (fields.length > 1 && fields[1] != null && !fields[1].trim().isEmpty()) {
-                        vendorResultCode = "R" + fields[1].trim();
-                    }
+                	String vendorResultCode = (fields.length > 2 && fields[2] != null) ? fields[2].trim() : "";
 
                     String lisResultCode = "";
                     String lisUnit = "";

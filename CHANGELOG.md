@@ -3,6 +3,10 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.9.12] - 2026-01-06
+### Fixed
+- GeneXpert result mapping to use the ASTM R|2 field for vendor result code matching
+
 ## [0.9.11] - 2025-12-22
 ### Added
 - Load LIVD-like mappings at startup and apply them (test/result codes, units, conversions) during ASTM→HL7 OUL^R22 conversion
