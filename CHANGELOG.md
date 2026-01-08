@@ -3,6 +3,10 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.9.13] - 2026-01-08
+### Fixed
+- Fix GeneXpert mapping to accept integer and float factor values.
+
 ## [0.9.12] - 2026-01-06
 ### Fixed
 - GeneXpert result mapping to use the ASTM R|2 field for vendor result code matching
