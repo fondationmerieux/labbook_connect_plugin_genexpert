@@ -53,7 +53,7 @@ public class AnalyzerGeneXpert implements Analyzer {
 	
 	private static final Logger logger = LoggerFactory.getLogger(AnalyzerGeneXpert.class); // Uses Connect's logback.xml
 	
-	private final String jar_version = "0.9.13";
+	private final String jar_version = "0.9.14";
 
     // === General Configuration ===
     protected String version = "";
@@ -656,12 +656,19 @@ public class AnalyzerGeneXpert implements Analyzer {
                                 String cv = m.getString("convert");
                                 convert = (cv == null) ? "none" : cv.trim();
 
-                                Double factorDouble = m.getDouble("factor");
-                                if (factorDouble != null) {
-                                    factor = factorDouble.doubleValue();
-                                } else {
-                                    Long factorLong = m.getLong("factor");
-                                    factor = (factorLong != null) ? factorLong.doubleValue() : 0.0;
+                                factor = 0.0;
+                                try {
+                                    Object factorObj = m.toMap().get("factor");
+                                    if (factorObj instanceof Number) {
+                                        factor = ((Number) factorObj).doubleValue();
+                                    } else if (factorObj instanceof String) {
+                                        String s = ((String) factorObj).trim();
+                                        if (!s.isEmpty()) {
+                                            factor = Double.parseDouble(s.replace(",", "."));
+                                        }
+                                    }
+                                } catch (Exception ignore) {
+                                    factor = 0.0;
                                 }
 
                                 break;
