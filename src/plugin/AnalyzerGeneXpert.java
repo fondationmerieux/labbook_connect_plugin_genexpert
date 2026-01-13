@@ -53,7 +53,7 @@ public class AnalyzerGeneXpert implements Analyzer {
 	
 	private static final Logger logger = LoggerFactory.getLogger(AnalyzerGeneXpert.class); // Uses Connect's logback.xml
 	
-	private final String jar_version = "0.9.14";
+	private final String jar_version = "0.9.15";
 
     // === General Configuration ===
     protected String version = "";
@@ -747,6 +747,14 @@ public class AnalyzerGeneXpert implements Analyzer {
                     String refRange = "";
                     if (fields.length > 5 && fields[5] != null) {
                         refRange = fields[5].trim();
+                    }
+                    
+                    // Build "< value" from reference range lower bound
+                    if (!value.isEmpty() && !refRange.isEmpty() && refRange.contains("to")) {
+                        String[] parts = refRange.split("to");
+                        if (parts.length == 2) {
+                            value = value + " < " + parts[0].trim();
+                        }
                     }
 
                     // OBX-11: status (we will place it in field 11)
