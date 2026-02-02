@@ -60,7 +60,6 @@ Sample file:
     doc/mapping_genexpert.toml
 
 Notes:
-- This mapping file is partial and provided as a sample.
 - Only tests explicitly listed are supported.
 - Additional tests and result mappings must be added as needed.
 
@@ -68,6 +67,23 @@ Notes:
 
 - Logs use the global LabBook Connect logging configuration.
 - Low-level ASTM traffic (ENQ, ACK, frames) is logged for diagnostic purposes.
+
+## Message archiving
+
+Message archiving is controlled by the `archive_msg` setting in the analyzer configuration file.
+
+When enabled (`archive_msg = "Y"`), raw messages are archived on disk for traceability and diagnostics.
+
+Archived messages are stored per analyzer instance in:
+    /storage/resource/connect/analyzer/{id_analyzer}/
+
+Subdirectories:
+- archive_lab27 (LAB-27 queries)
+- archive_lab28 (LAB-28 orders)
+- archive_lab29 (LAB-29 results)
+
+Messages are saved as plain text files.
+Filenames include the transaction type, message source (Analyzer or LIS), and a timestamp.
 
 ## Limitations
 
