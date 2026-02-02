@@ -3,6 +3,19 @@
 This plugin enables communication between a Cepheid GeneXpert analyzer and LabBook.
 The analyzer communicates using ASTM only; HL7 is used exclusively toward the LIS.
 
+## Installation note
+
+This bundle is NOT a ready-to-use directory.
+
+Files must be installed individually, either:
+- by copying them manually to their corresponding locations on the server, or
+- by uploading them through the LabBook user interface (when supported).
+
+The analyzer setting file is a sample and MUST be edited before use
+(network parameters, analyzer ID, URLs).
+
+Do not deploy the bundle as a single directory.
+
 ## Communication protocols
 
 - Analyzer ↔ LabBook Connect: ASTM E1381 over TCP socket
