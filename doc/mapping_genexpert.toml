@@ -4,7 +4,6 @@ document_identifier = "cepheid_genexpert"
 publication_version_id = "1.0"
 publication_date = "2025-12-21"
 
-# This mapping file is partial and intended as a sample.
 # Only the tests explicitly listed below are supported.
 # Additional tests and result mappings must be added as needed.
 
@@ -16,35 +15,121 @@ model = "GeneXpert 6.2"
 # Tests (analysis) mapping
 # -----------------------------
 [[ivd_test]]
+name = "carba_v2"
+vendor_test_code = "carba_v2"
+lis_test_code = "GX01"
+
+[[ivd_test]]
 name = "hbv_viral_load"
-vendor_test_code = "HBV"
+vendor_test_code = "hbv_viral_load"
 lis_test_code = "GX02"
 
 [[ivd_test]]
-name = "xpert_mtb_rif_ultra_v4"
-vendor_test_code = "MTB"
+name = "hiv_qual_xc_dbs_v1"
+vendor_test_code = "hiv_qual_xc_dbs_v1"
+lis_test_code = "GX03"
+
+[[ivd_test]]
+name = "hiv_qual_xc_wb_v1"
+vendor_test_code = "hiv_qual_xc_wb_v1"
+lis_test_code = "GX04"
+
+[[ivd_test]]
+name = "hiv_viral_load_xc_v3"
+vendor_test_code = "hiv_viral_load_xc_v3"
+lis_test_code = "GX05"
+
+[[ivd_test]]
+name = "xpert_mtb_rif"
+vendor_test_code = "xpert_mtb_rif"
 lis_test_code = "GX06"
+
+[[ivd_test]]
+name = "xpress_sars_cov2_v2"
+vendor_test_code = "xpress_sars_cov2_v2"
+lis_test_code = "GX07"
+
+[[ivd_test]]
+name = "xpert_carba_v1"
+vendor_test_code = "xpert_carba_v1"
+lis_test_code = "GX08"
+
+[[ivd_test]]
+name = "hiv_qual_v2"
+vendor_test_code = "hiv_qual_v2"
+lis_test_code = "GX09"
+
+[[ivd_test]]
+name = "hiv_viral_load_v1"
+vendor_test_code = "hiv_viral_load_v1"
+lis_test_code = "GX10"
 
 # -----------------------------
 # Result (variable) mapping
 # -----------------------------
 
+# Xpert Carba-R Version 2
+[[ivd_mapping]]
+test = "carba_v2"
+vendor_result_code = "^carba_v2^^imp1^Xpert Carba-R^2^IMP1^"
+lis_result_code = "821"
+vendor_unit = ""
+lis_unit = ""
+convert = "none"
+factor = 0
+
+[[ivd_mapping]]
+test = "carba_v2"
+vendor_result_code = "^carba_v2^^vim^Xpert Carba-R^2^VIM^"
+lis_result_code = "825"
+vendor_unit = ""
+lis_unit = ""
+convert = "none"
+factor = 0
+
+[[ivd_mapping]]
+test = "carba_v2"
+vendor_result_code = "^carba_v2^^ndm^Xpert Carba-R^2^NDM^"
+lis_result_code = "823"
+vendor_unit = ""
+lis_unit = ""
+convert = "none"
+factor = 0
+
+[[ivd_mapping]]
+test = "carba_v2"
+vendor_result_code = "^carba_v2^^kpc^Xpert Carba-R^2^KPC^"
+lis_result_code = "822"
+vendor_unit = ""
+lis_unit = ""
+convert = "none"
+factor = 0
+
+[[ivd_mapping]]
+test = "carba_v2"
+vendor_result_code = "^carba_v2^^oxa48^Xpert Carba-R^2^OXA48^"
+lis_result_code = "824"
+vendor_unit = ""
+lis_unit = ""
+convert = "none"
+factor = 0
+
 # HBV Viral Load
 [[ivd_mapping]]
 test = "hbv_viral_load"
-vendor_result_code = "HBV_VL_IUML"
-lis_result_code = "HBV_VL"
+vendor_result_code = "^^^hbv_viral_load^Xpert HBV Viral Load^1^^"
+lis_result_code = "826"
 vendor_unit = "IU/mL"
-lis_unit = "IU/mL"
+lis_unit = "UI/ml"
 convert = "none"
 factor = 0
 
 [[ivd_mapping]]
 test = "hbv_viral_load"
-vendor_result_code = "HBV_VL_LOG"
-lis_result_code = "HBV_VL_LOG"
-vendor_unit = "log10 IU/mL"
-lis_unit = "log10 IU/mL"
+vendor_result_code = "^^^hbv_viral_load^Xpert HBV Viral Load^1^^LOG"
+lis_result_code = "836"
+vendor_unit = ""
+lis_unit = ""
 convert = "none"
 factor = 0
 
@@ -54,29 +139,161 @@ factor = 0
 # - R|20 => MTB_trace
 # - R|39 => RIF
 [[ivd_mapping]]
-test = "xpert_mtb_rif_ultra_v4"
-vendor_result_code = "R1"
-lis_result_code = "MTB"
+test = "xpert_mtb_rif"
+vendor_result_code = "^xpert_mtb_rif^^mtb^Xpert MTB-RIF Ultra^4^MTB^"
+lis_result_code = "830"
 vendor_unit = ""
 lis_unit = ""
 convert = "none"
 factor = 0
 
 [[ivd_mapping]]
-test = "xpert_mtb_rif_ultra_v4"
-vendor_result_code = "R20"
-lis_result_code = "MTB_trace"
+test = "xpert_mtb_rif"
+vendor_result_code = "^xpert_mtb_rif^^mtbtrace^Xpert MTB-RIF Ultra^4^MTB Trace^"
+lis_result_code = "831"
 vendor_unit = ""
 lis_unit = ""
 convert = "none"
 factor = 0
 
 [[ivd_mapping]]
-test = "xpert_mtb_rif_ultra_v4"
-vendor_result_code = "R39"
-lis_result_code = "RIF"
+test = "xpert_mtb_rif"
+vendor_result_code = "^xpert_mtb_rif^^rifresist^Xpert MTB-RIF Ultra^4^RIF Resistance^"
+lis_result_code = "832"
 vendor_unit = ""
 lis_unit = ""
 convert = "none"
 factor = 0
 
+# Xpert HIV-1 Qual XC DBS Version 1
+[[ivd_mapping]]
+test = "hiv_qual_xc_dbs_v1"
+vendor_result_code = "^hiv_qual_xc_dbs_v1^^hiv1^Xpert HIV-1 Qual XC DBS^1^HIV-1^"
+lis_result_code = "827"
+vendor_unit = ""
+lis_unit = ""
+convert = "none"
+factor = 0
+
+[[ivd_mapping]]
+test = "hiv_qual_xc_dbs_v1"
+vendor_result_code = "^hiv_qual_xc_dbs_v1^^qc^Xpert HIV-1 Qual XC DBS^1^QC^"
+lis_result_code = "828"
+vendor_unit = ""
+lis_unit = ""
+convert = "none"
+factor = 0
+
+# Xpert HIV-1 Qual XC WB Version 1
+[[ivd_mapping]]
+test = "hiv_qual_xc_wb_v1"
+vendor_result_code = "^hiv_qual_xc_wb_v1^^hiv1^Xpert HIV-1 Qual XC WB^1^HIV-1^"
+lis_result_code = "827"
+vendor_unit = ""
+lis_unit = ""
+convert = "none"
+factor = 0
+
+[[ivd_mapping]]
+test = "hiv_qual_xc_wb_v1"
+vendor_result_code = "^hiv_qual_xc_wb_v1^^qc^Xpert HIV-1 Qual XC WB^1^QC^"
+lis_result_code = "828"
+vendor_unit = ""
+lis_unit = ""
+convert = "none"
+factor = 0
+
+# Xpert HIV-1 Viral Load XC Version 3
+[[ivd_mapping]]
+test = "hiv_viral_load_xc_v3"
+vendor_result_code = "^^^hiv_viral_load_xc_v3^Xpert HIV-1 Viral Load XC^3^^"
+lis_result_code = "829"
+vendor_unit = ""
+lis_unit = ""
+convert = "none"
+factor = 0
+
+# Xpert Xpress SARS-CoV-2 Version 2
+[[ivd_mapping]]
+test = "xpress_sars_cov2_v2"
+vendor_result_code = "^^^xpress_sars_cov2_v2^Xpert Xpress SARS-CoV-2^2^^"
+lis_result_code = "833"
+vendor_unit = ""
+lis_unit = ""
+convert = "none"
+factor = 0
+
+# Xpert_Carba-R Version 1
+[[ivd_mapping]]
+test = "xpert_carba_v1"
+vendor_result_code = "^xpert_carba_v1^^imp^Xpert_Carba-R^1^IMP^"
+lis_result_code = "834"
+vendor_unit = ""
+lis_unit = ""
+convert = "none"
+factor = 0
+
+[[ivd_mapping]]
+test = "xpert_carba_v1"
+vendor_result_code = "^xpert_carba_v1^^vim^Xpert_Carba-R^1^VIM^"
+lis_result_code = "825"
+vendor_unit = ""
+lis_unit = ""
+convert = "none"
+factor = 0
+
+[[ivd_mapping]]
+test = "xpert_carba_v1"
+vendor_result_code = "^xpert_carba_v1^^ndm^Xpert_Carba-R^1^NDM^"
+lis_result_code = "823"
+vendor_unit = ""
+lis_unit = ""
+convert = "none"
+factor = 0
+
+[[ivd_mapping]]
+test = "xpert_carba_v1"
+vendor_result_code = "^xpert_carba_v1^^kpc^Xpert_Carba-R^1^KPC^"
+lis_result_code = "822"
+vendor_unit = ""
+lis_unit = ""
+convert = "none"
+factor = 0
+
+[[ivd_mapping]]
+test = "xpert_carba_v1"
+vendor_result_code = "^xpert_carba_v1^^oxa48^Xpert_Carba-R^1^OXA48^"
+lis_result_code = "824"
+vendor_unit = ""
+lis_unit = ""
+convert = "none"
+factor = 0
+
+# Xpert_HIV-1 Qual Version 2
+[[ivd_mapping]]
+test = "hiv_qual_v2"
+vendor_result_code = "^hiv_qual_v2^^hiv1^Xpert_HIV-1 Qual^2^HIV-1^"
+lis_result_code = "827"
+vendor_unit = ""
+lis_unit = ""
+convert = "none"
+factor = 0
+
+[[ivd_mapping]]
+test = "hiv_qual_v2"
+vendor_result_code = "^hiv_qual_v2^^qc^Xpert_HIV-1 Qual^2^QC^"
+lis_result_code = "828"
+vendor_unit = ""
+lis_unit = ""
+convert = "none"
+factor = 0
+
+# Xpert_HIV-1 Viral Load Version 1
+[[ivd_mapping]]
+test = "hiv_viral_load_v1"
+vendor_result_code = "^^^hiv_viral_load_v1^Xpert_HIV-1 Viral Load^1^^"
+lis_result_code = "835"
+vendor_unit = ""
+lis_unit = ""
+convert = "none"
+factor = 0
