@@ -1,21 +1,23 @@
 # Analyzer Configuration File
-# Contains general settings and connection details for one ROCHE analyzer.
+# General settings and connection details for one GeneXpert analyzer.
+# This is a sample file.
+# The operator MUST edit this file and set real network values before use.
 
-version = "0.8.0"  # Configuration file version
+version = "1.0.0"  # Configuration file version
 
 [analyzer]
-brand = "GENEXPERT"                   			# Analyzer brand
-name = "GeneXpert"                    	 		# Analyzer model name
-id = "GX_01"                     			# Unique analyzer identifier
-plugin = "AnalyzerGeneXpert"             	# Plugin Java class name for this analyzer
-url_lis = "http://url_server_labbook/sigl"	# URL of the Laboratory Information System (LIS) upstream endpoint
-operation_mode = "batch"          			# Operation mode (batch or query)
-archive_msg = "Y"                 			# Enable ('Y') or disable ('N') message archiving
-type_cnx = "socket"               			# Connection type (socket, ...)
-type_msg = "ASTM"                  			# Message type (HL7 or ASTM)
-mapping = "/storage/resource/connect/analyzer/mapping/mapping_genexpert"  # Mapping configuration to use
+brand = "GENEXPERT"                           # Analyzer brand
+name = "GeneXpert"                            # Analyzer model name
+id = "GX_01"                                  # Unique analyzer identifier
+plugin = "AnalyzerGeneXpert"                  # Plugin Java class name for this analyzer
+url_lis = "http://localhost/sigl"             # LIS upstream endpoint
+operation_mode = "query"                      # Operation mode (batch or query)
+archive_msg = "Y"                             # Enable ('Y') or disable ('N') message archiving
+type_cnx = "socket_E1381"                     # Connection type (ASTM E1381 over TCP socket)
+type_msg = "ASTM"                             # Message type (HL7 or ASTM)
+mapping = "/storage/resource/connect/analyzer/mapping/mapping_genexpert"  # Mapping file path (without .toml)
 
 [analyzer.socket]
-mode = "client"                   # Socket mode (client or server)
-ip = "IP_ADDRESS_TO_ENTER"        # Analyzer IP address
-port = PORT_NUMBER_TO_ENTER       # Port number for socket communication
+mode = "server"                               # server (validated) or client (experimental)
+ip = "IP_ADDRESS_TO_ENTER"                    # Used ONLY in client mode (ignored in server mode)
+port = 7500                                   # Example value – allowed ranges: 7500–7599, 12300–12399

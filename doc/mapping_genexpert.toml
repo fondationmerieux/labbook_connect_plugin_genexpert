@@ -4,6 +4,10 @@ document_identifier = "cepheid_genexpert"
 publication_version_id = "1.0"
 publication_date = "2025-12-21"
 
+# This mapping file is partial and intended as a sample.
+# Only the tests explicitly listed below are supported.
+# Additional tests and result mappings must be added as needed.
+
 [equipment]
 manufacturer = "Cepheid"
 model = "GeneXpert 6.2"

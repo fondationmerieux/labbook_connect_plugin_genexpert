@@ -1,0 +1,81 @@
+# GeneXpert – LabBook Connect plugin
+
+This plugin enables communication between a Cepheid GeneXpert analyzer and LabBook.
+The analyzer communicates using ASTM only; HL7 is used exclusively toward the LIS.
+
+## Communication protocols
+
+- Analyzer ↔ LabBook Connect: ASTM E1381 over TCP socket
+- LabBook Connect ↔ LIS: HL7 v2.5.1 (HTTP)
+
+## Supported transactions
+
+- LAB-27 (Query)  
+  ASTM Q| (analyzer) → HL7 QBP^Q11 (to LIS)  
+  HL7 RSP^K11 (from LIS) → ASTM (to analyzer)
+
+- LAB-28 (Orders)  
+  HL7 OML^O33 (from LIS) → ASTM (to analyzer)
+
+- LAB-29 (Results)  
+  ASTM (from analyzer) → HL7 OUL^R22 (to LIS)
+
+## Deployment modes
+
+- server (validated, production mode)  
+  LabBook Connect listens on a TCP port and waits for the analyzer connection.
+
+- client (experimental)  
+  LabBook Connect connects to the analyzer IP/port.  
+  Not recommended for production use.
+
+## Configuration files
+
+Two configuration files are required for each GeneXpert analyzer instance:
+- one analyzer setting file (connection and routing)
+- one mapping file (tests and result mapping)
+
+### 1) Analyzer settings
+
+Location:  
+    /storage/resource/connect/analyzer/setting/
+
+Sample file:  
+    doc/analyzer_genexpert.toml
+
+Important:
+- The operator MUST edit this file before use.
+- In server mode, the ip field is ignored.
+- In client mode (experimental), the ip field is required.
+- Allowed TCP port ranges:
+  - 7500–7599
+  - 12300–12399
+
+### 2) Mapping file
+
+Location:  
+    /storage/resource/connect/analyzer/mapping/
+
+Sample file:  
+    doc/mapping_genexpert.toml
+
+Notes:
+- This mapping file is partial and provided as a sample.
+- Only tests explicitly listed are supported.
+- Additional tests and result mappings must be added as needed.
+
+## Logging
+
+- Logs use the global LabBook Connect logging configuration.
+- Low-level ASTM traffic (ENQ, ACK, frames) is logged for diagnostic purposes.
+
+## Limitations
+
+- No automatic frame retransmission on ASTM NAK (send side).
+- Client mode is experimental.
+- RSP^K11 responses always terminate with L|1|N.
+
+## Versioning
+
+- Plugin version is embedded in the JAR.
+- Setting and mapping files have independent versions.

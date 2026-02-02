@@ -53,7 +53,7 @@ public class AnalyzerGeneXpert implements Analyzer {
 	
 	private static final Logger logger = LoggerFactory.getLogger(AnalyzerGeneXpert.class); // Uses Connect's logback.xml
 	
-	private final String jar_version = "0.9.15";
+	private final String jar_version = "1.0.0";
 
     // === General Configuration ===
     protected String version = "";
@@ -529,7 +529,7 @@ public class AnalyzerGeneXpert implements Analyzer {
 
             StringBuilder hl7 = new StringBuilder();
 
-            // === MSH (construit manuellement) ===
+            // === MSH (built manually) ===
             String sendingApp = "GeneXpert";
             String sendingFacility = "Analyzer";
             String receivingApp = "LabBook";
@@ -889,11 +889,16 @@ public class AnalyzerGeneXpert implements Analyzer {
     }
     
     /**
-     * Converts an HL7 RSP^K11 response from LabBook into a set of ASTM lines.
-     * Each patient block is mapped to P| and O| segments. Handles missing fields gracefully.
-     * 
-     * @param hl7Message HL7 message string in ER7 format
-     * @return Array of ASTM-formatted lines to return to GeneXpert
+     * Converts an HL7 RSP^K11 response into an ASTM reply.
+     *
+     * Patient (P) and order (O) segments are generated when the required
+     * information is present in the HL7 message.
+     *
+     * This implementation always terminates the ASTM response with "L|1|N".
+     * No positive ASTM acknowledgment is generated for RSP^K11 messages.
+     *
+     * @param hl7Message HL7 RSP^K11 message in ER7 format
+     * @return Array of ASTM-formatted lines to return to the analyzer
      */
     public static String[] convertRSP_K11toASTM(String hl7Message) {
         StringBuilder astm = new StringBuilder();
@@ -919,7 +924,7 @@ public class AnalyzerGeneXpert implements Analyzer {
             	        astm.append("O|1|").append(spmId).append("||^^^").append(obrCode).append("^").append(obrName)
             	            .append("^4.7^^||").append(getCurrentDateTime()).append("||||||||||||||||||F\r");
             	    } else {
-            	        logger.warn("RSP^K11 incomplet : SPM ou OBR manquant");
+            	    	logger.warn("RSP^K11 incomplete: missing SPM or OBR");
             	    }
             	}
 
@@ -956,7 +961,7 @@ public class AnalyzerGeneXpert implements Analyzer {
                 astm.append("O|1|").append(spmId).append("||^^^").append(obrCode).append("^").append(obrName)
                     .append("^4.7^^||").append(getCurrentDateTime()).append("||||||||||||||||||F\r");
             } else {
-                logger.warn("RSP^K11 incomplet : SPM ou OBR manquant");
+            	logger.warn("RSP^K11 incomplete: missing SPM or OBR");
             }
         }
 
@@ -968,11 +973,17 @@ public class AnalyzerGeneXpert implements Analyzer {
     
     /**
      * Sends an ASTM message (line by line) to the analyzer over the active socket.
-     * Each line is framed using ASTM E1381 protocol (STX, ETX, checksum).
-     * Responds to each frame with ACK/NAK logic, and completes with EOT.
      *
-     * @param lines ASTM message split into lines (e.g., H|..., P|..., O|..., L|...)
-     * @return "ACK" if all frames were accepted, "NAK"/"UNKNOWN"/"ERROR" otherwise
+     * Each line is framed using ASTM E1381 protocol (STX, frame number, payload,
+     * ETX, checksum, CR, LF).
+     *
+     * The sender waits for ACK or NAK after ENQ and after each frame.
+     *
+     * This implementation does not retry frame transmission after a NAK.
+     * On NAK or timeout, the transmission is aborted and an error status is returned.
+     *
+     * @param lines ASTM message split into lines (H|..., P|..., O|..., L|...)
+     * @return "ACK" if all frames were accepted, otherwise "NAK", "UNKNOWN", or "ERROR"
      */
     public String sendASTMMessage(String[] lines) {
         try {
@@ -1001,6 +1012,7 @@ public class AnalyzerGeneXpert implements Analyzer {
             }
 
             for (int i = 0; i < lines.length; i++) {
+            	// ASTM E1381: frame number cycles from 0 to 7
                 String body = ((i + 1) % 8) + lines[i];
                 byte[] bodyBytes = body.getBytes(StandardCharsets.US_ASCII);
                 ByteArrayOutputStream frame = new ByteArrayOutputStream();
@@ -1074,18 +1086,10 @@ public class AnalyzerGeneXpert implements Analyzer {
     }
     
     /**
-     * Starts the communication listener thread for the analyzer device.
-     * <p>
-     * Depending on the configured connection type, this method initializes a socket connection in client mode
-     * or logs an unsupported configuration message. The connection attempt utilizes exponential backoff
-     * for reconnection attempts, starting with a 5-second delay and doubling the wait time after each failed attempt,
-     * up to a maximum of 1 minute.
-     * <p>
-     * Once connected, the method continuously listens for incoming messages from the analyzer, setting
-     * the internal `listening` state to true upon successful connection. It resets the backoff timer after every successful
-     * connection. In case of connection errors or interruptions, the socket connection will be retried automatically.
-     * <p>
-     * This method runs continuously in a separate thread to avoid blocking the main application flow.
+     * Starts the analyzer communication thread.
+     *
+     * SERVER mode is the validated deployment mode (socket accept loop + ASTM E1381 FSM per connection).
+     * CLIENT mode exists for compatibility tests and is considered experimental.
      */
     @Override
     public void listenDevice() {
@@ -1246,13 +1250,17 @@ public class AnalyzerGeneXpert implements Analyzer {
 
     /**
      * Listens for incoming ASTM messages using ASTM E1381 framing.
-     * - STEP 1: Wait ENQ, reply ACK
-     * - STEP 2: Receive frames (STX, frame-no, payload, ETX|ETB, checksum[2], CR, LF)
-     * - STEP 3: Validate checksum on [frame-no + payload + (ETX|ETB)]
-     * - STEP 4: ACK/NAK each frame
-     * - STEP 5: On EOT, dispatch to LAB-27/LAB-29 and optionally turnaround reply
      *
-     * Blocking; runs while `listening` is true.
+     * STEP 1: Wait for ENQ from the analyzer (15s timeout) and reply with ACK.
+     * STEP 2: Receive one or more frames:
+     *         STX + frame number + payload + ETX/ETB + checksum + CR + LF.
+     * STEP 3: Validate checksum for each frame and reply ACK or NAK
+     *         (ETB = continuation frame, ETX = final frame).
+     * STEP 4: Assemble the complete ASTM message until EOT is received.
+     * STEP 5: Dispatch the message to LAB-27 or LAB-29 depending on content.
+     * STEP 6: If a response is produced, send it back to the analyzer on the same connection.
+     *
+     * This method is blocking and runs while the socket is open and listening is enabled.
      */
     private void listenForIncomingMessages() {
     	// Loop while the socket is alive; per-connection FSM
@@ -1349,6 +1357,7 @@ public class AnalyzerGeneXpert implements Analyzer {
                     // STEP 3.8: Append frame payload into the assembled message (NO extra delimiter here)
                     // The payload already contains CR between ASTM records; frames can split a record arbitrarily.
                     // Do NOT inject CR here, or you will break records that continue in the next frame.
+                    // Frames may split an ASTM record across multiple frames.
                     assembledMessage.write(payloadBytes);
 
                     // NOTE: If terminator == ETB, there will be continuation frames before EOT.
@@ -1392,11 +1401,15 @@ public class AnalyzerGeneXpert implements Analyzer {
     }
 
     /**
-     * Dispatches the received ASTM message to the appropriate LAB transaction handler.
-     * Identifies the type of message by detecting H| (result) or Q| (query) segments.
+     * Dispatches a decoded ASTM message to the appropriate LAB handler.
      *
-     * @param receivedMessage Raw ASTM message (decoded, multi-line string)
-     * @return Response message (ASTM or HL7), or null if unrecognized or invalid
+     * Routing rules:
+     * - presence of a Q| segment → LAB-27
+     * - otherwise, presence of an H| segment → LAB-29
+     * - otherwise, the message is ignored
+     *
+     * @param receivedMessage Raw ASTM message (CR-delimited)
+     * @return ASTM response message or null if no response is required
      */
     private String processAnalyzerMsg(String receivedMessage) {
         try {
@@ -1504,7 +1517,7 @@ public class AnalyzerGeneXpert implements Analyzer {
         }
     }
     
-    // === utility function ===
+    // === Utility methods ===
     
     /**
      * Safely extracts a timestamp value from a TS field (e.g., PID-7 birth date).
@@ -1520,8 +1533,8 @@ public class AnalyzerGeneXpert implements Analyzer {
 
     /**
      * Safely extracts patient name components from an XPN list (e.g., PID-5).
-     * If lastName=true → returns family name.
-     * If lastName=false → returns given name.
+     * If lastName=true: returns family name.
+     * If lastName=false: returns given name.
      */
     private String safeXPN(XPN[] list, int index, boolean lastName) {
         try {

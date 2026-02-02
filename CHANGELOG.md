@@ -3,6 +3,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.0.0] - 2026-02-02
+### Changed
+- Initial stable release of the GeneXpert plugin
+- Added operator README and generated Javadoc
+
 ## [0.9.15] - 2026-01-13
 ### Changed
 - build analyzer result value from result + reference range fields when available
