@@ -11,6 +11,21 @@ publication_date = "2025-12-21"
 manufacturer = "Cepheid"
 model = "GeneXpert 6.2"
 
+# ---------------------------------------
+# Result value conversion rules
+# ---------------------------------------
+# convert can be one of:
+#   - none
+#   - multiply   (value = value * factor)
+#   - divide     (value = value / factor)
+#   - add        (value = value + factor)
+#   - subtract   (value = value - factor)
+#   - log10      (value = log10(value), value > 0 required)
+#
+# factor:
+#   - numeric (number or string)
+#   - ignored when convert = "none"
+
 # -----------------------------
 # Tests (analysis) mapping
 # -----------------------------
