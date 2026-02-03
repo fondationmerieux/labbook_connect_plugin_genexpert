@@ -76,6 +76,14 @@ Notes:
 - Only tests explicitly listed are supported.
 - Additional tests and result mappings must be added as needed.
 
+## GeneXpert limitation
+
+The test code sent to GeneXpert (Host Test Code / ASTM O segment, field O|...^^^CODE)
+MUST be 15 characters or less.
+
+Longer codes may be accepted by LabBook but cause GeneXpert results
+to be received without being correctly matched or displayed.
+
 ## Logging
 
 - Logs use the global LabBook Connect logging configuration.

@@ -4,27 +4,12 @@ document_identifier = "cepheid_genexpert"
 publication_version_id = "1.0"
 publication_date = "2025-12-21"
 
-# Only the tests explicitly listed below are supported.
-# Additional tests and result mappings must be added as needed.
-
 [equipment]
 manufacturer = "Cepheid"
 model = "GeneXpert 6.2"
 
-# ---------------------------------------
-# Result value conversion rules
-# ---------------------------------------
-# convert can be one of:
-#   - none
-#   - multiply   (value = value * factor)
-#   - divide     (value = value / factor)
-#   - add        (value = value + factor)
-#   - subtract   (value = value - factor)
-#   - log10      (value = log10(value), value > 0 required)
-#
-# factor:
-#   - numeric (number or string)
-#   - ignored when convert = "none"
+# IMPORTANT
+# vendor_test_code: max 15 characters (GeneXpert limitation)
 
 # -----------------------------
 # Tests (analysis) mapping
@@ -40,18 +25,18 @@ vendor_test_code = "hbv_viral_load"
 lis_test_code = "GX02"
 
 [[ivd_test]]
-name = "hiv_qual_xc_dbs_v1"
-vendor_test_code = "hiv_qual_xc_dbs_v1"
+name = "hiv_qual_xcdbs"
+vendor_test_code = "hiv_qual_xcdbs"
 lis_test_code = "GX03"
 
 [[ivd_test]]
-name = "hiv_qual_xc_wb_v1"
-vendor_test_code = "hiv_qual_xc_wb_v1"
+name = "hiv_qual_xc_wb"
+vendor_test_code = "hiv_qual_xc_wb"
 lis_test_code = "GX04"
 
 [[ivd_test]]
-name = "hiv_viral_load_xc_v3"
-vendor_test_code = "hiv_viral_load_xc_v3"
+name = "hiv_viral_load"
+vendor_test_code = "hiv_viral_load"
 lis_test_code = "GX05"
 
 [[ivd_test]]
@@ -60,8 +45,8 @@ vendor_test_code = "xpert_mtb_rif"
 lis_test_code = "GX06"
 
 [[ivd_test]]
-name = "xpress_sars_cov2_v2"
-vendor_test_code = "xpress_sars_cov2_v2"
+name = "sars_cov2_v2"
+vendor_test_code = "sars_cov2_v2"
 lis_test_code = "GX07"
 
 [[ivd_test]]
@@ -75,8 +60,8 @@ vendor_test_code = "hiv_qual_v2"
 lis_test_code = "GX09"
 
 [[ivd_test]]
-name = "hiv_viral_load_v1"
-vendor_test_code = "hiv_viral_load_v1"
+name = "viral_load_v1"
+vendor_test_code = "viral_load_v1"
 lis_test_code = "GX10"
 
 # -----------------------------
@@ -182,8 +167,8 @@ factor = 0
 
 # Xpert HIV-1 Qual XC DBS Version 1
 [[ivd_mapping]]
-test = "hiv_qual_xc_dbs_v1"
-vendor_result_code = "^hiv_qual_xc_dbs_v1^^hiv1^Xpert HIV-1 Qual XC DBS^1^HIV-1^"
+test = "hiv_qual_xcdbs"
+vendor_result_code = "^hiv_qual_xcdbs^^hiv1^Xpert HIV-1 Qual XC DBS^1^HIV-1^"
 lis_result_code = "827"
 vendor_unit = ""
 lis_unit = ""
@@ -191,8 +176,8 @@ convert = "none"
 factor = 0
 
 [[ivd_mapping]]
-test = "hiv_qual_xc_dbs_v1"
-vendor_result_code = "^hiv_qual_xc_dbs_v1^^qc^Xpert HIV-1 Qual XC DBS^1^QC^"
+test = "hiv_qual_xcdbs"
+vendor_result_code = "^hiv_qual_xcdbs^^qc^Xpert HIV-1 Qual XC DBS^1^QC^"
 lis_result_code = "828"
 vendor_unit = ""
 lis_unit = ""
@@ -201,8 +186,8 @@ factor = 0
 
 # Xpert HIV-1 Qual XC WB Version 1
 [[ivd_mapping]]
-test = "hiv_qual_xc_wb_v1"
-vendor_result_code = "^hiv_qual_xc_wb_v1^^hiv1^Xpert HIV-1 Qual XC WB^1^HIV-1^"
+test = "hiv_qual_xc_wb"
+vendor_result_code = "^hiv_qual_xc_wb^^hiv1^Xpert HIV-1 Qual XC WB^1^HIV-1^"
 lis_result_code = "827"
 vendor_unit = ""
 lis_unit = ""
@@ -210,8 +195,8 @@ convert = "none"
 factor = 0
 
 [[ivd_mapping]]
-test = "hiv_qual_xc_wb_v1"
-vendor_result_code = "^hiv_qual_xc_wb_v1^^qc^Xpert HIV-1 Qual XC WB^1^QC^"
+test = "hiv_qual_xc_wb"
+vendor_result_code = "^hiv_qual_xc_wb^^qc^Xpert HIV-1 Qual XC WB^1^QC^"
 lis_result_code = "828"
 vendor_unit = ""
 lis_unit = ""
@@ -220,8 +205,8 @@ factor = 0
 
 # Xpert HIV-1 Viral Load XC Version 3
 [[ivd_mapping]]
-test = "hiv_viral_load_xc_v3"
-vendor_result_code = "^^^hiv_viral_load_xc_v3^Xpert HIV-1 Viral Load XC^3^^"
+test = "hiv_viral_load"
+vendor_result_code = "^^^hiv_viral_load^Xpert HIV-1 Viral Load XC^3^^"
 lis_result_code = "829"
 vendor_unit = ""
 lis_unit = ""
@@ -230,8 +215,8 @@ factor = 0
 
 # Xpert Xpress SARS-CoV-2 Version 2
 [[ivd_mapping]]
-test = "xpress_sars_cov2_v2"
-vendor_result_code = "^^^xpress_sars_cov2_v2^Xpert Xpress SARS-CoV-2^2^^"
+test = "sars_cov2_v2"
+vendor_result_code = "^^^sars_cov2_v2^Xpert Xpress SARS-CoV-2^2^^"
 lis_result_code = "833"
 vendor_unit = ""
 lis_unit = ""
@@ -305,8 +290,8 @@ factor = 0
 
 # Xpert_HIV-1 Viral Load Version 1
 [[ivd_mapping]]
-test = "hiv_viral_load_v1"
-vendor_result_code = "^^^hiv_viral_load_v1^Xpert_HIV-1 Viral Load^1^^"
+test = "viral_load_v1"
+vendor_result_code = "^^^viral_load_v1^Xpert_HIV-1 Viral Load^1^^"
 lis_result_code = "835"
 vendor_unit = ""
 lis_unit = ""
