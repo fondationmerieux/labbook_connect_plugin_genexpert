@@ -53,7 +53,7 @@ public class AnalyzerGeneXpert implements Analyzer {
 	
 	private static final Logger logger = LoggerFactory.getLogger(AnalyzerGeneXpert.class); // Uses Connect's logback.xml
 	
-	private final String jar_version = "1.0.0";
+	private final String jar_version = "1.0.1";
 
     // === General Configuration ===
     protected String version = "";
@@ -889,84 +889,117 @@ public class AnalyzerGeneXpert implements Analyzer {
     }
     
     /**
-     * Converts an HL7 RSP^K11 response into an ASTM reply.
+     * Converts an HL7 RSP^K11 response into an ASTM reply for GeneXpert.
      *
-     * Patient (P) and order (O) segments are generated when the required
-     * information is present in the HL7 message.
-     *
-     * This implementation always terminates the ASTM response with "L|1|N".
-     * No positive ASTM acknowledgment is generated for RSP^K11 messages.
+     * Rule:
+     * - Return L|1|Y when the RSP^K11 was processed successfully (even if no orders are present).
+     * - Return L|1|N only on technical/parsing errors.
      *
      * @param hl7Message HL7 RSP^K11 message in ER7 format
      * @return Array of ASTM-formatted lines to return to the analyzer
      */
     public static String[] convertRSP_K11toASTM(String hl7Message) {
         StringBuilder astm = new StringBuilder();
-        astm.append("H|\\^&|||INST^GeneXpert^4.7||||||P|1394-97|").append(getCurrentDateTime()).append("\r");
 
-        String[] segments = hl7Message.split("\r");
-        
-        String patientId = "";
-        String patientName = "";
-        String birthDate = "";
-        String sex = "";
-        String spmId = "";
-        String obrCode = "";
-        String obrName = "";
+        // Technical guardrails
+        if (hl7Message == null || hl7Message.trim().isEmpty() || !hl7Message.startsWith("MSH|")) {
+            logger.warn("convertRSP_K11toASTM: invalid HL7 input (null/empty/no MSH)");
+            astm.append("H|\\^&|||INST^GeneXpert^4.7||||||P|1394-97|").append(getCurrentDateTime()).append("\r");
+            astm.append("L|1|N\r");
+            return astm.toString().split("\r");
+        }
 
-        for (String segment : segments) {
-            if (segment.startsWith("PID|")) {
-            	if (!isBlank(patientId)) {
-            	    astm.append("P|1|").append(patientId).append("||").append(patientName).append("||")
-            	        .append(birthDate).append("|").append(sex).append("\r");
+        try {
+            astm.append("H|\\^&|||INST^GeneXpert^4.7||||||P|1394-97|").append(getCurrentDateTime()).append("\r");
 
-            	    if (!isBlank(spmId) && !isBlank(obrCode)) {
-            	        astm.append("O|1|").append(spmId).append("||^^^").append(obrCode).append("^").append(obrName)
-            	            .append("^4.7^^||").append(getCurrentDateTime()).append("||||||||||||||||||F\r");
-            	    } else {
-            	    	logger.warn("RSP^K11 incomplete: missing SPM or OBR");
-            	    }
-            	}
+            String[] segments = hl7Message.split("\r");
 
-                String[] fields = segment.split("\\|");
-                patientId = fields.length > 3 ? fields[3] : "";
-                patientName = fields.length > 5 ? fields[5] : "";
-                birthDate = fields.length > 7 ? fields[7] : "";
-                sex = fields.length > 8 ? fields[8] : "";
+            String patientId = "";
+            String patientName = "";
+            String birthDate = "";
+            String sex = "";
+            String spmId = "";
+            String obrCode = "";
+            String obrName = "";
 
-                spmId = "";
-                obrCode = "";
-                obrName = "";
+            boolean hasAnyOrder = false;
 
-            } else if (segment.startsWith("SPM|")) {
-                String[] fields = segment.split("\\|");
-                spmId = fields.length > 2 ? fields[2] : "";
+            for (String segment : segments) {
+                if (segment.startsWith("PID|")) {
 
-            } else if (segment.startsWith("OBR|")) {
-                String[] fields = segment.split("\\|");
-                if (fields.length > 4) {
-                    String[] testInfo = fields[4].split("\\^");
-                    obrCode = testInfo.length > 0 ? testInfo[0] : "";
-                    obrName = testInfo.length > 1 ? testInfo[1] : "";
+                    // Flush previous patient block (if any)
+                    if (!isBlank(patientId)) {
+                        astm.append("P|1|").append(patientId).append("||").append(patientName).append("||")
+                            .append(birthDate).append("|").append(sex).append("\r");
+
+                        if (!isBlank(spmId) && !isBlank(obrCode)) {
+                            astm.append("O|1|").append(spmId).append("||^^^").append(obrCode).append("^").append(obrName)
+                                .append("^4.7^^||").append(getCurrentDateTime()).append("||||||||||||||||||F\r");
+                            hasAnyOrder = true;
+                        } else {
+                            logger.info("convertRSP_K11toASTM: no order data for patientId={}", patientId);
+                        }
+                    }
+
+                    // Start new patient block
+                    String[] fields = segment.split("\\|", -1);
+                    patientId = (fields.length > 3) ? fields[3] : "";
+                    patientName = (fields.length > 5) ? fields[5] : "";
+                    birthDate = (fields.length > 7) ? fields[7] : "";
+                    sex = (fields.length > 8) ? fields[8] : "";
+
+                    spmId = "";
+                    obrCode = "";
+                    obrName = "";
+
+                } else if (segment.startsWith("SPM|")) {
+                    String[] fields = segment.split("\\|", -1);
+                    spmId = (fields.length > 2) ? fields[2] : "";
+
+                } else if (segment.startsWith("OBR|")) {
+                    String[] fields = segment.split("\\|", -1);
+                    if (fields.length > 4) {
+                        String[] testInfo = fields[4].split("\\^", -1);
+                        obrCode = (testInfo.length > 0) ? testInfo[0] : "";
+                        obrName = (testInfo.length > 1) ? testInfo[1] : "";
+                    }
                 }
             }
-        }
 
-        // Flush last block if present
-        if (!isBlank(patientId)) {
-            astm.append("P|1|").append(patientId).append("||").append(patientName).append("||")
-                .append(birthDate).append("|").append(sex).append("\r");
+            // Flush last patient block
+            if (!isBlank(patientId)) {
+                astm.append("P|1|").append(patientId).append("||").append(patientName).append("||")
+                    .append(birthDate).append("|").append(sex).append("\r");
 
-            if (!isBlank(spmId) && !isBlank(obrCode)) {
-                astm.append("O|1|").append(spmId).append("||^^^").append(obrCode).append("^").append(obrName)
-                    .append("^4.7^^||").append(getCurrentDateTime()).append("||||||||||||||||||F\r");
-            } else {
-            	logger.warn("RSP^K11 incomplete: missing SPM or OBR");
+                if (!isBlank(spmId) && !isBlank(obrCode)) {
+                    astm.append("O|1|").append(spmId).append("||^^^").append(obrCode).append("^").append(obrName)
+                        .append("^4.7^^||").append(getCurrentDateTime()).append("||||||||||||||||||F\r");
+                    hasAnyOrder = true;
+                } else {
+                    logger.info("convertRSP_K11toASTM: no order data for patientId={}", patientId);
+                }
             }
-        }
 
-        astm.append("L|1|N\r");
-        return astm.toString().split("\r");
+            // If we successfully processed HL7, return positive completion even if no order
+            astm.append("L|1|Y\r");
+
+            // Optional: log whether any O lines were produced (debug only)
+            if (!hasAnyOrder) {
+                logger.info("convertRSP_K11toASTM: processed RSP^K11 but no orders found; returning L|1|Y");
+            }
+
+            // Avoid trailing empty element if split() sees a final \r
+            String out = astm.toString();
+            if (out.endsWith("\r")) out = out.substring(0, out.length() - 1);
+            return out.split("\r");
+
+        } catch (Exception e) {
+            logger.error("convertRSP_K11toASTM: exception - " + e.getMessage(), e);
+            astm.setLength(0);
+            astm.append("H|\\^&|||INST^GeneXpert^4.7||||||P|1394-97|").append(getCurrentDateTime()).append("\r");
+            astm.append("L|1|N\r");
+            return astm.toString().split("\r");
+        }
     }
 
     // === Communication Management ===
