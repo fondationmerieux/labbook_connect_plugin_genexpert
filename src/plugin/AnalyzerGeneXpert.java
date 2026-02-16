@@ -53,7 +53,7 @@ public class AnalyzerGeneXpert implements Analyzer {
 	
 	private static final Logger logger = LoggerFactory.getLogger(AnalyzerGeneXpert.class); // Uses Connect's logback.xml
 	
-	private final String jar_version = "1.0.2";
+	private final String jar_version = "1.0.3";
 
     // === General Configuration ===
     protected String version = "";
@@ -901,11 +901,10 @@ public class AnalyzerGeneXpert implements Analyzer {
     public String[] convertRSP_K11toASTM(String hl7Message) {
         StringBuilder astm = new StringBuilder();
 
-        // Technical guardrails
         if (hl7Message == null || hl7Message.trim().isEmpty() || !hl7Message.startsWith("MSH|")) {
             logger.warn("convertRSP_K11toASTM: invalid HL7 input (null/empty/no MSH)");
             astm.append("H|\\^&|||INST^GeneXpert^4.7||||||P|1394-97|").append(getCurrentDateTime()).append("\r");
-            astm.append("L|1|N\r");
+            astm.append("L|1|N");
             return astm.toString().split("\r");
         }
 
@@ -914,111 +913,100 @@ public class AnalyzerGeneXpert implements Analyzer {
 
             String[] segments = hl7Message.split("\r");
 
+            // Current patient context
             String patientId = "";
             String patientName = "";
             String birthDate = "";
             String sex = "";
+            boolean patientHeaderEmitted = false;
+
+            // Current order context (within patient)
             String spmId = "";
-            String obrCode = "";
-            String obrName = "";
 
             boolean hasAnyOrder = false;
 
             for (String segment : segments) {
                 if (segment.startsWith("PID|")) {
-
-                    // Flush previous patient block (if any)
-                    if (!isBlank(patientId)) {
-                        astm.append("P|1|").append(patientId).append("||").append(patientName).append("||")
-                            .append(birthDate).append("|").append(sex).append("\r");
-
-                        if (!isBlank(spmId) && !isBlank(obrCode)) {
-                            astm.append("O|1|").append(spmId).append("||^^^").append(obrCode).append("^").append(obrName)
-                                .append("^4.7^^||").append(getCurrentDateTime()).append("||||||||||||||||||F\r");
-                            hasAnyOrder = true;
-                        } else {
-                            logger.info("convertRSP_K11toASTM: no order data for patientId={}", patientId);
-                        }
-                    }
-
-                    // Start new patient block
+                    // Switch patient context (do NOT emit P here)
                     String[] fields = segment.split("\\|", -1);
                     patientId = (fields.length > 3) ? fields[3] : "";
                     patientName = (fields.length > 5) ? fields[5] : "";
                     birthDate = (fields.length > 7) ? fields[7] : "";
                     sex = (fields.length > 8) ? fields[8] : "";
 
+                    patientHeaderEmitted = false;
                     spmId = "";
-                    obrCode = "";
-                    obrName = "";
+                    continue;
+                }
 
-                } else if (segment.startsWith("SPM|")) {
+                if (segment.startsWith("SPM|")) {
                     String[] fields = segment.split("\\|", -1);
                     spmId = (fields.length > 2) ? fields[2] : "";
+                    continue;
+                }
 
-                } else if (segment.startsWith("OBR|")) {
+                if (segment.startsWith("OBR|")) {
                     String[] fields = segment.split("\\|", -1);
+
+                    String obrName = "";
+                    String lisTestCode = "";
                     if (fields.length > 4) {
                         String[] testInfo = fields[4].split("\\^", -1);
 
-                        // HL7: OBR-4 = CE/CWE. In our flow, lis_test_code is typically in component 4 (^^^GX04)
-                        String lisTestCode = "";
+                        // Prefer component 4 (^^^GX01) but accept component 1 (89371-9)
                         if (testInfo.length > 3 && testInfo[3] != null && !testInfo[3].trim().isEmpty()) {
                             lisTestCode = testInfo[3].trim();
                         } else if (testInfo.length > 0 && testInfo[0] != null) {
-                            // fallback if someone put it in component 1
                             lisTestCode = testInfo[0].trim();
                         }
 
-                        // Display name (optional)
                         obrName = (testInfo.length > 1 && testInfo[1] != null) ? testInfo[1].trim() : "";
-
-                        // Map LIS test code (GXxx) -> vendor_test_code (<=15 chars)
-                        obrCode = mapLisTestCodeToVendorTestCode(lisTestCode);
-                        
-                        if (isBlank(spmId)) {
-                            logger.warn("convertRSP_K11toASTM: OBR received but spmId is empty (OBR-4='{}')", fields[4]);
-                        }
-
-                        if (obrCode.isEmpty()) {
-                            logger.warn("convertRSP_K11toASTM: unmapped lisTestCode='{}' (OBR-4='{}')", lisTestCode, fields[4]);
-                        }
                     }
-                }
-            }
 
-            // Flush last patient block
-            if (!isBlank(patientId)) {
-                astm.append("P|1|").append(patientId).append("||").append(patientName).append("||")
-                    .append(birthDate).append("|").append(sex).append("\r");
+                    String obrCode = mapLisTestCodeToVendorTestCode(lisTestCode);
 
-                if (!isBlank(spmId) && !isBlank(obrCode)) {
+                    if (isBlank(spmId)) {
+                        logger.warn("convertRSP_K11toASTM: OBR received but spmId is empty (OBR-4='{}')", (fields.length > 4 ? fields[4] : ""));
+                        continue;
+                    }
+
+                    if (isBlank(obrCode)) {
+                        logger.warn("convertRSP_K11toASTM: unmapped lisTestCode='{}' (OBR-4='{}')", lisTestCode, (fields.length > 4 ? fields[4] : ""));
+                        continue;
+                    }
+
+                    // Emit patient only when we actually have a mapped order to send
+                    if (!patientHeaderEmitted) {
+                        if (isBlank(patientId)) {
+                            logger.warn("convertRSP_K11toASTM: mapped order found but patientId is empty; skipping patient block");
+                            continue;
+                        }
+
+                        astm.append("P|1|").append(patientId).append("||").append(patientName).append("||")
+                            .append(birthDate).append("|").append(sex).append("\r");
+                        patientHeaderEmitted = true;
+                    }
+
                     astm.append("O|1|").append(spmId).append("||^^^").append(obrCode).append("^").append(obrName)
                         .append("^4.7^^||").append(getCurrentDateTime()).append("||||||||||||||||||F\r");
+
                     hasAnyOrder = true;
-                } else {
-                    logger.info("convertRSP_K11toASTM: no order data for patientId={}", patientId);
                 }
             }
 
-            // If we successfully processed HL7, return positive completion even if no order
-            astm.append("L|1|Y\r");
+            astm.append("L|1|Y");
 
-            // Optional: log whether any O lines were produced (debug only)
             if (!hasAnyOrder) {
-                logger.info("convertRSP_K11toASTM: processed RSP^K11 but no orders found; returning L|1|Y");
+                logger.info("convertRSP_K11toASTM: processed RSP^K11 but no mapped orders found; returning L|1|Y");
             }
 
-            // Avoid trailing empty element if split() sees a final \r
-            String out = astm.toString();
-            if (out.endsWith("\r")) out = out.substring(0, out.length() - 1);
-            return out.split("\r");
+            return astm.toString().split("\r");
 
         } catch (Exception e) {
             logger.error("convertRSP_K11toASTM: exception - " + e.getMessage(), e);
             astm.setLength(0);
             astm.append("H|\\^&|||INST^GeneXpert^4.7||||||P|1394-97|").append(getCurrentDateTime()).append("\r");
-            astm.append("L|1|N\r");
+            astm.append("L|1|N");
             return astm.toString().split("\r");
         }
     }
