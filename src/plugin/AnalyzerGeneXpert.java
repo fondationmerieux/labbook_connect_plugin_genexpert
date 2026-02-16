@@ -53,7 +53,7 @@ public class AnalyzerGeneXpert implements Analyzer {
 	
 	private static final Logger logger = LoggerFactory.getLogger(AnalyzerGeneXpert.class); // Uses Connect's logback.xml
 	
-	private final String jar_version = "1.0.1";
+	private final String jar_version = "1.0.2";
 
     // === General Configuration ===
     protected String version = "";
@@ -898,7 +898,7 @@ public class AnalyzerGeneXpert implements Analyzer {
      * @param hl7Message HL7 RSP^K11 message in ER7 format
      * @return Array of ASTM-formatted lines to return to the analyzer
      */
-    public static String[] convertRSP_K11toASTM(String hl7Message) {
+    public String[] convertRSP_K11toASTM(String hl7Message) {
         StringBuilder astm = new StringBuilder();
 
         // Technical guardrails
@@ -960,8 +960,29 @@ public class AnalyzerGeneXpert implements Analyzer {
                     String[] fields = segment.split("\\|", -1);
                     if (fields.length > 4) {
                         String[] testInfo = fields[4].split("\\^", -1);
-                        obrCode = (testInfo.length > 0) ? testInfo[0] : "";
-                        obrName = (testInfo.length > 1) ? testInfo[1] : "";
+
+                        // HL7: OBR-4 = CE/CWE. In our flow, lis_test_code is typically in component 4 (^^^GX04)
+                        String lisTestCode = "";
+                        if (testInfo.length > 3 && testInfo[3] != null && !testInfo[3].trim().isEmpty()) {
+                            lisTestCode = testInfo[3].trim();
+                        } else if (testInfo.length > 0 && testInfo[0] != null) {
+                            // fallback if someone put it in component 1
+                            lisTestCode = testInfo[0].trim();
+                        }
+
+                        // Display name (optional)
+                        obrName = (testInfo.length > 1 && testInfo[1] != null) ? testInfo[1].trim() : "";
+
+                        // Map LIS test code (GXxx) -> vendor_test_code (<=15 chars)
+                        obrCode = mapLisTestCodeToVendorTestCode(lisTestCode);
+                        
+                        if (isBlank(spmId)) {
+                            logger.warn("convertRSP_K11toASTM: OBR received but spmId is empty (OBR-4='{}')", fields[4]);
+                        }
+
+                        if (obrCode.isEmpty()) {
+                            logger.warn("convertRSP_K11toASTM: unmapped lisTestCode='{}' (OBR-4='{}')", lisTestCode, fields[4]);
+                        }
                     }
                 }
             }
@@ -1681,5 +1702,23 @@ public class AnalyzerGeneXpert implements Analyzer {
      */
     private static boolean isBlank(String s) {
         return s == null || s.trim().isEmpty();
+    }
+    
+    private String mapLisTestCodeToVendorTestCode(String lisTestCode) {
+        if (lisTestCode == null) return "";
+        String key = lisTestCode.trim();
+        if (key.isEmpty()) return "";
+
+        List<Toml> tests = mappingToml.getTables("ivd_test");
+        if (tests == null) return "";
+
+        for (Toml t : tests) {
+            String lis = t.getString("lis_test_code");
+            if (lis != null && lis.trim().equalsIgnoreCase(key)) {
+                String vendor = t.getString("vendor_test_code");
+                return (vendor == null) ? "" : vendor.trim();
+            }
+        }
+        return "";
     }
 }

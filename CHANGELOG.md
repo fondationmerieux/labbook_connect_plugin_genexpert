@@ -3,6 +3,10 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.0.2] - 2026-02-16
+### Fixed
+- LAB-27: correct mapping of OBR-4 (GXxx) to vendor_test_code in ASTM response
+
 ## [1.0.1] - 2026-02-12
 ### Fixed
 - LAB-27: return `L|1|Y` on successful RSP^K11 processing; `L|1|N` only on technical error.
