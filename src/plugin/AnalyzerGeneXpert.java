@@ -53,7 +53,7 @@ public class AnalyzerGeneXpert implements Analyzer {
 	
 	private static final Logger logger = LoggerFactory.getLogger(AnalyzerGeneXpert.class); // Uses Connect's logback.xml
 	
-	private final String jar_version = "1.0.3";
+	private final String jar_version = "1.0.4";
 
     // === General Configuration ===
     protected String version = "";
@@ -988,7 +988,7 @@ public class AnalyzerGeneXpert implements Analyzer {
                     }
 
                     astm.append("O|1|").append(spmId).append("||^^^").append(obrCode).append("^").append(obrName)
-                        .append("^4.7^^||").append(getCurrentDateTime()).append("||||||||||||||||||F\r");
+                        .append("^4.7^^||").append(getCurrentDateTime()).append("||||||||||||||||||Q\r");
 
                     hasAnyOrder = true;
                 }

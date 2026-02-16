@@ -3,6 +3,10 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.0.4] - 2026-02-16
+### Fixed
+- LAB-27 : use ASTM O segment status 'Q' instead of 'F' for LAB-27 query responses
+
 ## [1.0.3] - 2026-02-16
 ### Fixed
 - LAB-27: fix duplicate P segments in LAB-27 ASTM response.
