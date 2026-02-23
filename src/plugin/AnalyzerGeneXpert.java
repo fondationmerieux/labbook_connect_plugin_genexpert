@@ -53,7 +53,7 @@ public class AnalyzerGeneXpert implements Analyzer {
 	
 	private static final Logger logger = LoggerFactory.getLogger(AnalyzerGeneXpert.class); // Uses Connect's logback.xml
 	
-	private final String jar_version = "1.0.4";
+	private final String jar_version = "1.0.5";
 
     // === General Configuration ===
     protected String version = "";
@@ -89,6 +89,8 @@ public class AnalyzerGeneXpert implements Analyzer {
     private static final byte CR = 0x0D;
     private static final byte LF = 0x0A;
     private static final byte ETB = 0x17; // End of Transmission Block (multi-frame continuation)
+    
+    private volatile String lastReplyHeader = "";
     
     /**
      * Default constructor.
@@ -903,13 +905,13 @@ public class AnalyzerGeneXpert implements Analyzer {
 
         if (hl7Message == null || hl7Message.trim().isEmpty() || !hl7Message.startsWith("MSH|")) {
             logger.warn("convertRSP_K11toASTM: invalid HL7 input (null/empty/no MSH)");
-            astm.append("H|\\^&|||INST^GeneXpert^4.7||||||P|1394-97|").append(getCurrentDateTime()).append("\r");
+            astm.append(isBlank(this.lastReplyHeader) ? buildReplyHeader(null) : this.lastReplyHeader).append("\r");
             astm.append("L|1|N");
             return astm.toString().split("\r");
         }
 
         try {
-            astm.append("H|\\^&|||INST^GeneXpert^4.7||||||P|1394-97|").append(getCurrentDateTime()).append("\r");
+        	astm.append(isBlank(this.lastReplyHeader) ? buildReplyHeader(null) : this.lastReplyHeader).append("\r");
 
             String[] segments = hl7Message.split("\r");
 
@@ -1005,7 +1007,7 @@ public class AnalyzerGeneXpert implements Analyzer {
         } catch (Exception e) {
             logger.error("convertRSP_K11toASTM: exception - " + e.getMessage(), e);
             astm.setLength(0);
-            astm.append("H|\\^&|||INST^GeneXpert^4.7||||||P|1394-97|").append(getCurrentDateTime()).append("\r");
+            astm.append(isBlank(this.lastReplyHeader) ? buildReplyHeader(null) : this.lastReplyHeader).append("\r");
             astm.append("L|1|N");
             return astm.toString().split("\r");
         }
@@ -1418,6 +1420,8 @@ public class AnalyzerGeneXpert implements Analyzer {
                     continue;
                 }
                 logger.info("DEBUG: Complete ASTM message:\n{}", astmMessage.replace("\r", "\n"));
+                
+                this.lastReplyHeader = buildReplyHeader(astmMessage);
 
                 // STEP 5: Dispatch to LAB-27/LAB-29; if response produced, do ASTM turnaround send
                 String responseMessage = processAnalyzerMsg(astmMessage);
@@ -1708,5 +1712,44 @@ public class AnalyzerGeneXpert implements Analyzer {
             }
         }
         return "";
+    }
+    
+    /**
+     * Builds an ASTM H| header for the reply message.
+     *
+     * If an inbound ASTM message is provided, this method:
+     * - extracts the first H| line,
+     * - removes any ASTM frame prefix number (0–7),
+     * - keeps all original header fields,
+     * - replaces only the last field (date/time) with the current timestamp.
+     *
+     * If no valid H| line is found, a default GeneXpert-compatible
+     * header is generated.
+     *
+     * This ensures the reply header stays aligned with the analyzer
+     * format (e.g. H|@^\ vs H|\^&) and avoids hard-coded assumptions.
+     */
+    private String buildReplyHeader(String inboundMessage) {
+        String now = getCurrentDateTime();
+
+        if (inboundMessage != null) {
+            String[] lines = inboundMessage.replace("\r\n", "\r").split("\r");
+            for (String line : lines) {
+                if (line == null) continue;
+
+                // Remove frame number if present (e.g. "1H|...")
+                line = line.replaceFirst("^[0-7](?=[A-Z]\\|)", "").trim();
+
+                if (line.startsWith("H|")) {
+                    int lastPipe = line.lastIndexOf('|');
+                    if (lastPipe > 1) {
+                        return line.substring(0, lastPipe + 1) + now;
+                    }
+                    return line + "|" + now;
+                }
+            }
+        }
+
+        return "H|\\^&|||INST^GeneXpert^4.7||||||P|1394-97|" + now;
     }
 }
