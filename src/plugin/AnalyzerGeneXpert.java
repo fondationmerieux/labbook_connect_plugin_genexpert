@@ -53,7 +53,7 @@ public class AnalyzerGeneXpert implements Analyzer {
 	
 	private static final Logger logger = LoggerFactory.getLogger(AnalyzerGeneXpert.class); // Uses Connect's logback.xml
 	
-	private final String jar_version = "1.0.5";
+	private final String jar_version = "1.0.6";
 
     // === General Configuration ===
     protected String version = "";
@@ -65,7 +65,7 @@ public class AnalyzerGeneXpert implements Analyzer {
     protected String type_cnx = "";
     protected String type_msg = "";
     protected String archive_msg = "";
-    protected String operation_mode = "batch";
+    protected String operation_mode = "query";
     protected String mode = "";
     protected String ip_analyzer = "";
     protected int port_analyzer = 0;
@@ -475,8 +475,21 @@ public class AnalyzerGeneXpert implements Analyzer {
             lines.add("H|\\^&|||INST^GeneXpert^" + assayVersion + "||||||P|1394-97|" + now);
             lines.add("P|1|" + patId + "|" + patAltId + "|" + lastName + "^" + firstName + "||" +
                       dob + "|" + sex + "||||" + address + "^^" + city + "^" + zip + "||" + phone);
-            lines.add("O|1|" + specimenId + "||^^^" + testCode + "^" + assayName + "^" + assayVersion +
-                      "^^|" + specimenType + "|" + now + "||||||||||||||||||F");
+            
+            String[] orderFields = new String[27];
+            Arrays.fill(orderFields, "");
+
+            orderFields[0] = "O";
+            orderFields[1] = "1";
+            orderFields[2] = specimenId;
+            orderFields[4] = "^^^" + testCode + "^" + assayName + "^" + assayVersion + "^^";
+            orderFields[5] = specimenType;
+            orderFields[7] = now;
+            orderFields[12] = "A";
+            orderFields[16] = "ORH";
+            orderFields[26] = "Q";
+
+            lines.add(String.join("|", orderFields));
             lines.add("L|1|N");
 
             return lines.toArray(new String[0]);
@@ -989,8 +1002,19 @@ public class AnalyzerGeneXpert implements Analyzer {
                         patientHeaderEmitted = true;
                     }
 
-                    astm.append("O|1|").append(spmId).append("||^^^").append(obrCode).append("^").append(obrName)
-                        .append("^4.7^^||").append(getCurrentDateTime()).append("||||||||||||||||||Q\r");
+                    String[] orderFields = new String[27];
+                    Arrays.fill(orderFields, "");
+
+                    orderFields[0] = "O";
+                    orderFields[1] = "1";
+                    orderFields[2] = spmId;
+                    orderFields[4] = "^^^" + obrCode + "^" + obrName + "^4.7^^";
+                    orderFields[7] = getCurrentDateTime();
+                    orderFields[12] = "A";
+                    orderFields[16] = "ORH";
+                    orderFields[26] = "Q";
+
+                    astm.append(String.join("|", orderFields)).append("\r");
 
                     hasAnyOrder = true;
                 }
