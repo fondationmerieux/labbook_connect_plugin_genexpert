@@ -53,7 +53,7 @@ public class AnalyzerGeneXpert implements Analyzer {
 	
 	private static final Logger logger = LoggerFactory.getLogger(AnalyzerGeneXpert.class); // Uses Connect's logback.xml
 	
-	private final String jar_version = "1.0.6";
+	private final String jar_version = "1.0.7";
 
     // === General Configuration ===
     protected String version = "";
@@ -881,12 +881,34 @@ public class AnalyzerGeneXpert implements Analyzer {
 
             // Fill QPD segment (Query Parameter Definition)
             QPD qpd = qbp.getQPD();
-            qpd.getMessageQueryName().getIdentifier().setValue("LAB-27^IHE");
+            qpd.getMessageQueryName().getIdentifier().setValue("LAB-27");
+            qpd.getMessageQueryName().getText().setValue("IHE");
             qpd.getQueryTag().setValue("GENEXPERT");
 
-            // Use ASTM field[2] as specimen ID if available
-            if (fields.length > 2) {
-                qpd.getField(3, 0).parse(fields[2]);
+            String specimenId = "";
+            if (fields.length > 2 && fields[2] != null) {
+                specimenId = fields[2].trim();
+            }
+
+            if (specimenId.startsWith("^")) {
+                specimenId = specimenId.substring(1).trim();
+            }
+
+            boolean isQueryAll = false;
+            if (fields.length > 0) {
+                String lastNonEmptyField = "";
+                for (String field : fields) {
+                    if (field != null && !field.trim().isEmpty()) {
+                        lastNonEmptyField = field.trim();
+                    }
+                }
+                isQueryAll = "A".equalsIgnoreCase(lastNonEmptyField);
+            }
+
+            if (!specimenId.isEmpty()) {
+                qpd.getField(3, 0).parse(specimenId);
+            } else if (isQueryAll) {
+                qpd.getField(3, 0).parse("ALL");
             }
 
             // Fill RCP (response control parameters)
