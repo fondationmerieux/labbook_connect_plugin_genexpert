@@ -61,8 +61,9 @@ Important:
 - In server mode, the ip field is ignored.
 - In client mode (experimental), the ip field is required.
 - Allowed TCP port ranges:
-  - 7500–7599
-  - 12300–12399
+  - 3100-3199
+  - 7500-7599
+  - 12300-12399
 
 ### 2) Mapping file
 

@@ -53,7 +53,7 @@ public class AnalyzerGeneXpert implements Analyzer {
 	
 	private static final Logger logger = LoggerFactory.getLogger(AnalyzerGeneXpert.class); // Uses Connect's logback.xml
 	
-	private final String jar_version = "1.0.7";
+	private final String jar_version = "1.0.8";
 
     // === General Configuration ===
     protected String version = "";
@@ -778,14 +778,20 @@ public class AnalyzerGeneXpert implements Analyzer {
                         status = fields[8].trim();
                     }
 
-                    // OBX-5 value, OBX-6 units, OBX-7 reference range
-                    hl7.append(value)
-                       .append("|").append(units)
-                       .append("|").append(refRange)
-                       .append("|||"); // OBX-8, OBX-9, OBX-10 empty
-
-                    // OBX-11: result status
-                    hl7.append(status).append("\r");
+                 // Build OBX segment fields (HL7 v2.5.1):
+                 // OBX-5 = observation value
+                 // OBX-6 = units
+                 // OBX-7 = reference range
+                 // OBX-8..10 = intentionally left empty (no abnormal flags / probability / nature)
+                 // OBX-11 = observation result status (F, P, etc.)
+                 hl7.append(value)
+                     .append("|").append(units)
+                     .append("|").append(refRange)
+                     .append("|")   // OBX-8 (abnormal flags - not used)
+                     .append("|")   // OBX-9 (probability - not used)
+                     .append("|")   // OBX-10 (nature of abnormal test - not used)
+                     .append(status) // OBX-11 (result status)
+                     .append("\r");
 
                     obxIndex++;
                     break;
