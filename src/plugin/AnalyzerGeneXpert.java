@@ -53,7 +53,7 @@ public class AnalyzerGeneXpert implements Analyzer {
 	
 	private static final Logger logger = LoggerFactory.getLogger(AnalyzerGeneXpert.class); // Uses Connect's logback.xml
 	
-	private final String jar_version = "1.0.8";
+	private final String jar_version = "1.0.9";
 
     // === General Configuration ===
     protected String version = "";
@@ -1793,11 +1793,17 @@ public class AnalyzerGeneXpert implements Analyzer {
                 line = line.replaceFirst("^[0-7](?=[A-Z]\\|)", "").trim();
 
                 if (line.startsWith("H|")) {
-                    int lastPipe = line.lastIndexOf('|');
-                    if (lastPipe > 1) {
-                        return line.substring(0, lastPipe + 1) + now;
+                    String[] fields = line.split("\\|", -1);
+
+                    if (fields.length > 13) {
+                        String tmp = fields[4];   // H.5
+                        fields[4] = fields[9];    // H.10
+                        fields[9] = tmp;
                     }
-                    return line + "|" + now;
+
+                    fields[fields.length - 1] = now;
+
+                    return String.join("|", fields);
                 }
             }
         }
