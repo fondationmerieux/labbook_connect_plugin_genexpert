@@ -53,7 +53,7 @@ public class AnalyzerGeneXpert implements Analyzer {
 	
 	private static final Logger logger = LoggerFactory.getLogger(AnalyzerGeneXpert.class); // Uses Connect's logback.xml
 	
-	private final String jar_version = "1.0.9";
+	private final String jar_version = "1.0.10";
 
     // === General Configuration ===
     protected String version = "";
@@ -991,7 +991,7 @@ public class AnalyzerGeneXpert implements Analyzer {
                 if (segment.startsWith("OBR|")) {
                     String[] fields = segment.split("\\|", -1);
 
-                    String obrName = "";
+                    //String obrName = "";
                     String lisTestCode = "";
                     if (fields.length > 4) {
                         String[] testInfo = fields[4].split("\\^", -1);
@@ -1003,7 +1003,7 @@ public class AnalyzerGeneXpert implements Analyzer {
                             lisTestCode = testInfo[0].trim();
                         }
 
-                        obrName = (testInfo.length > 1 && testInfo[1] != null) ? testInfo[1].trim() : "";
+                        //obrName = (testInfo.length > 1 && testInfo[1] != null) ? testInfo[1].trim() : "";
                     }
 
                     String obrCode = mapLisTestCodeToVendorTestCode(lisTestCode);
@@ -1036,8 +1036,9 @@ public class AnalyzerGeneXpert implements Analyzer {
                     orderFields[0] = "O";
                     orderFields[1] = "1";
                     orderFields[2] = spmId;
-                    orderFields[4] = "^^^" + obrCode + "^" + obrName + "^4.7^^";
-                    orderFields[7] = getCurrentDateTime();
+                    orderFields[4] = "^^^" + obrCode;
+                    orderFields[5] = "R"; // Priority
+                    orderFields[6] = getCurrentDateTime();
                     orderFields[12] = "A";
                     orderFields[16] = "ORH";
                     orderFields[26] = "Q";
@@ -1048,7 +1049,7 @@ public class AnalyzerGeneXpert implements Analyzer {
                 }
             }
 
-            astm.append("L|1|Y");
+            astm.append("L|1|F");
 
             if (!hasAnyOrder) {
                 logger.info("convertRSP_K11toASTM: processed RSP^K11 but no mapped orders found; returning L|1|Y");

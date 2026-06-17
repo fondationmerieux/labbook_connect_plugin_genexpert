@@ -3,6 +3,10 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.0.10] - 2026-06-17
+### Fixed
+- LAB-27 ASTM response format to match protocol specifications for O and L segments.
+
 ## [1.0.9] - 2026-06-16
 ### Fixed
 - LAB-27 ASTM reply header to correctly swap H.5 and H.10 fields
