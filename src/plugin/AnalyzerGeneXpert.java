@@ -53,7 +53,7 @@ public class AnalyzerGeneXpert implements Analyzer {
 	
 	private static final Logger logger = LoggerFactory.getLogger(AnalyzerGeneXpert.class); // Uses Connect's logback.xml
 	
-	private final String jar_version = "1.0.10";
+	private final String jar_version = "1.0.12";
 
     // === General Configuration ===
     protected String version = "";
@@ -486,11 +486,11 @@ public class AnalyzerGeneXpert implements Analyzer {
             orderFields[5] = specimenType;
             orderFields[7] = now;
             orderFields[12] = "A";
-            orderFields[16] = "ORH";
-            orderFields[26] = "Q";
+            orderFields[15] = "ORH";
+            orderFields[25] = "Q";
 
             lines.add(String.join("|", orderFields));
-            lines.add("L|1|N");
+            lines.add("L|1|F");
 
             return lines.toArray(new String[0]);
 
@@ -1039,9 +1039,9 @@ public class AnalyzerGeneXpert implements Analyzer {
                     orderFields[4] = "^^^" + obrCode;
                     orderFields[5] = "R"; // Priority
                     orderFields[6] = getCurrentDateTime();
-                    orderFields[12] = "A";
-                    orderFields[16] = "ORH";
-                    orderFields[26] = "Q";
+                    orderFields[11] = "A";
+                    orderFields[15] = "ORH";
+                    orderFields[25] = "Q";
 
                     astm.append(String.join("|", orderFields)).append("\r");
 
