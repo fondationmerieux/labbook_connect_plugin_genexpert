@@ -53,7 +53,7 @@ public class AnalyzerGeneXpert implements Analyzer {
 	
 	private static final Logger logger = LoggerFactory.getLogger(AnalyzerGeneXpert.class); // Uses Connect's logback.xml
 	
-	private final String jar_version = "1.0.12";
+	private final String jar_version = "1.0.13";
 
     // === General Configuration ===
     protected String version = "";
@@ -476,7 +476,7 @@ public class AnalyzerGeneXpert implements Analyzer {
             lines.add("P|1|" + patId + "|" + patAltId + "|" + lastName + "^" + firstName + "||" +
                       dob + "|" + sex + "||||" + address + "^^" + city + "^" + zip + "||" + phone);
             
-            String[] orderFields = new String[27];
+            String[] orderFields = new String[26];
             Arrays.fill(orderFields, "");
 
             orderFields[0] = "O";
@@ -1030,7 +1030,7 @@ public class AnalyzerGeneXpert implements Analyzer {
                         patientHeaderEmitted = true;
                     }
 
-                    String[] orderFields = new String[27];
+                    String[] orderFields = new String[26];
                     Arrays.fill(orderFields, "");
 
                     orderFields[0] = "O";
