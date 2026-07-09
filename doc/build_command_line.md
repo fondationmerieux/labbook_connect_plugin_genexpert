@@ -24,21 +24,13 @@ The plugin requires LabBook Connect classes during compilation.
 javac -cp "lib/*:../labbook_connect/target/classes" -d target/classes $(find src -name "*.java")
 ```
 
-## 3) Copy resources
-
-Copy plugin resources into compiled classes:
-
-```bash
-cp -r resources/* target/classes/
-```
-
-## 4) Prepare plugin output directory
+## 3) Prepare plugin output directory
 
 ```bash
 mkdir -p bin/plugin
 ```
 
-## 5) Generate plugin JAR
+## 4) Generate plugin JAR
 
 Equivalent to Eclipse "Export JAR" with:
 - generated class files and resources
@@ -50,7 +42,7 @@ Equivalent to Eclipse "Export JAR" with:
 jar cfm bin/plugin/AnalyzerGeneXpert.jar MANIFEST.MF -C ../labbook_connect/target/classes . -C target/classes . src resources doc lib script README.md LICENSE.md CHANGELOG.md MANIFEST.MF .classpath .project
 ```
 
-## 6) Verify JAR content
+## 5) Verify JAR content
 
 ```bash
 jar tf bin/plugin/AnalyzerGeneXpert.jar | head -20
