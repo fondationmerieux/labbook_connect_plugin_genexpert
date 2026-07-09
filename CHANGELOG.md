@@ -3,6 +3,10 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.0.14] - 2026-07-01
+### Changed
+- Generate a unique ASTM message ID for each reply instead of reusing the incoming message ID.
+
 ## [1.0.13] - 2026-06-30
 ### Fixed
 - Removed the trailing empty field from GeneXpert ASTM O segments to comply with the LIS interface specification.

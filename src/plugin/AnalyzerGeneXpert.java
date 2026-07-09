@@ -53,7 +53,7 @@ public class AnalyzerGeneXpert implements Analyzer {
 	
 	private static final Logger logger = LoggerFactory.getLogger(AnalyzerGeneXpert.class); // Uses Connect's logback.xml
 	
-	private final String jar_version = "1.0.13";
+	private final String jar_version = "1.0.14";
 
     // === General Configuration ===
     protected String version = "";
@@ -1795,6 +1795,8 @@ public class AnalyzerGeneXpert implements Analyzer {
 
                 if (line.startsWith("H|")) {
                     String[] fields = line.split("\\|", -1);
+                    
+                    fields[2] = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMddHHmmssSSSSSS"));
 
                     if (fields.length > 13) {
                         String tmp = fields[4];   // H.5
