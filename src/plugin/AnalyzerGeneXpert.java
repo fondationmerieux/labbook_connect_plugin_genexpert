@@ -53,7 +53,7 @@ public class AnalyzerGeneXpert implements Analyzer {
 	
 	private static final Logger logger = LoggerFactory.getLogger(AnalyzerGeneXpert.class); // Uses Connect's logback.xml
 	
-	private final String jar_version = "1.0.14";
+	private final String jar_version = "1.0.15";
 
     // === General Configuration ===
     protected String version = "";
@@ -89,8 +89,48 @@ public class AnalyzerGeneXpert implements Analyzer {
     private static final byte CR = 0x0D;
     private static final byte LF = 0x0A;
     private static final byte ETB = 0x17; // End of Transmission Block (multi-frame continuation)
-    
+
+    // Constants mandated by the GeneXpert LIS Interface Protocol Specification, 302-2261 Rev. F (2023-06).
+    // Grouped here so that the values granted to the instrument stay consistent across the class.
+
+    /** Maximum text length of a single frame, in bytes (section 3.2.3.1). */
+    private static final int MAX_FRAME_TEXT = 240;
+
+    /**
+     * Maximum number of times the same frame is sent before the message is
+     * aborted (section 3.2.5.1: abort after 6 consecutive rejections).
+     */
+    private static final int MAX_FRAME_ATTEMPTS = 6;
+
+    /**
+     * Time to wait for a reply from the instrument, in milliseconds
+     * (section 3.2.5.2). The specification grants the receiver 15 s to reply
+     * to a frame or an ENQ. The previous value (10 s) aborted the transfer
+     * while the instrument was still within its allowance.
+     */
+    private static final int REPLY_TIMEOUT_MS = 15000;
+
+    /**
+     * Time the receiver waits for a frame or an EOT (section 3.2.5.2).
+     * After 30 s the link is considered back in the Neutral State and the
+     * incomplete message is discarded.
+     */
+    private static final int RECEIVE_TIMEOUT_MS = 30000;
+
+    /** Delay required before re-sending an ENQ after a NAK (section 3.2.2.1). */
+    private static final int ENQ_RETRY_DELAY_MS = 10000;
+
+    /** Number of link establishment attempts before giving up. */
+    private static final int ENQ_MAX_ATTEMPTS = 3;
+
     private volatile String lastReplyHeader = "";
+
+    /**
+     * Number of the last accepted inbound frame, used by the sequence check of section 3.2.5.1: a frame must carry
+     * either the number of the last accepted frame, or the next one modulo 8.
+     * Holds -1 until the first frame of a transfer has been accepted.
+     */
+    private int lastAcceptedFrameNo = -1;
     
     /**
      * Default constructor.
@@ -228,6 +268,13 @@ public class AnalyzerGeneXpert implements Analyzer {
 
             // Parse ASTM message into lines
             String[] astmLines = logAndSplitAstm(msg);
+
+            // A cancellation carries no order request (section 6.3.1.2). The host only acknowledges at frame level,
+            // so returning null here leaves the instrument without a download message.
+            if (isQueryCancellation(astmLines)) {
+                logger.info("Lab27 GeneXpert : query cancellation received (Q-13 = A), no order returned");
+                return null;
+            }
 
             // Convert ASTM query to HL7 QBP^Q11
             String qbpMsg = convertASTMQueryToQBP_Q11(astmLines);
@@ -790,7 +837,7 @@ public class AnalyzerGeneXpert implements Analyzer {
                      .append("|")   // OBX-8 (abnormal flags - not used)
                      .append("|")   // OBX-9 (probability - not used)
                      .append("|")   // OBX-10 (nature of abnormal test - not used)
-                     .append(status) // OBX-11 (result status)
+                     .append("|").append(status) // OBX-11 (result status)
                      .append("\r");
 
                     obxIndex++;
@@ -849,9 +896,46 @@ public class AnalyzerGeneXpert implements Analyzer {
     }
     
     /**
-     * Converts ASTM-formatted GeneXpert query (e.g., Q line) into an HL7 QBP^Q11 message.
-     * @param lines An array of ASTM lines (e.g., starting with Q|...)
-     * @return HL7 QBP^Q11 message in ER7 format or null if conversion fails.
+     * Tells whether an ASTM query record cancels the previous request.
+     * <p>
+     * Two Q records look alike but carry opposite meanings:
+     * <pre>
+     *   Q|1|ALL||||||||||O@N     query for all pending test orders
+     *   Q|1|||||||||||A          cancellation of the previous query
+     * </pre>
+     * Q-13 holds the request information status code. "A" means cancellation (sections 6.3.1.2 and 6.3.2.2), and
+     * the accompanying C record states it in plain text.
+     *
+     * @param lines ASTM records received from the instrument.
+     * @return true when the message cancels the previous request.
+     */
+    private boolean isQueryCancellation(String[] lines) {
+        if (lines == null) {
+            return false;
+        }
+
+        for (String line : lines) {
+            if (line == null || !line.matches("^\\d*Q\\|.*")) {
+                continue;
+            }
+
+            String[] fields = line.split("\\|", -1);
+
+            // Q-13, request information status code
+            if (fields.length > 12 && fields[12] != null
+                    && "A".equalsIgnoreCase(fields[12].trim())) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Converts an ASTM query (Q record) into an HL7 QBP^Q11 message.
+     *
+     * @param lines ASTM records received from the instrument.
+     * @return HL7 QBP^Q11 message in ER7 format, or null when the conversion fails.
      */
     public String convertASTMQueryToQBP_Q11(String[] lines) {
         try {
@@ -891,25 +975,28 @@ public class AnalyzerGeneXpert implements Analyzer {
             qpd.getMessageQueryName().getText().setValue("IHE");
             qpd.getQueryTag().setValue("GENEXPERT");
 
+            // Q-3 is a composite field (section 6.3.2):
+            //     Patient ID 1 ^ Specimen ID ^ Patient ID 2
+            // The specimen identifier is component 2. "ALL" in place of the whole field is a query for every pending order (section 1.8.1).
             String specimenId = "";
-            if (fields.length > 2 && fields[2] != null) {
-                specimenId = fields[2].trim();
-            }
+            String startingRange = (fields.length > 2 && fields[2] != null) ? fields[2].trim() : "";
 
-            if (specimenId.startsWith("^")) {
-                specimenId = specimenId.substring(1).trim();
-            }
+            boolean isQueryAll = "ALL".equalsIgnoreCase(startingRange);
 
-            boolean isQueryAll = false;
-            if (fields.length > 0) {
-                String lastNonEmptyField = "";
-                for (String field : fields) {
-                    if (field != null && !field.trim().isEmpty()) {
-                        lastNonEmptyField = field.trim();
-                    }
+            if (!isQueryAll && !startingRange.isEmpty()) {
+                String[] comps = startingRange.split("\\^", -1);
+                if (comps.length > 1) {
+                    specimenId = (comps[1] == null) ? "" : comps[1].trim();
+                } else {
+                    // No separator: section 1.9.4 states the instrument never
+                    // issues a patient-only query, so treat the value as a
+                    // specimen identifier.
+                    specimenId = comps[0].trim();
+                    logger.warn("convertASTMQueryToQBP_Q11: Q-3 has no '^' separator ('{}'), "
+                              + "treating it as a specimen identifier", startingRange);
                 }
-                isQueryAll = "A".equalsIgnoreCase(lastNonEmptyField);
             }
+
 
             if (!specimenId.isEmpty()) {
                 qpd.getField(3, 0).parse(specimenId);
@@ -1025,7 +1112,14 @@ public class AnalyzerGeneXpert implements Analyzer {
                             continue;
                         }
 
-                        astm.append("P|1|").append(patientId).append("||").append(patientName).append("||")
+                        // P record field positions (section 6.4.2):
+                        //   P-3 = Patient ID 2 (practice-assigned identifier)
+                        //   P-5 = Patient ID 1 (patient identification)
+                        //   P-6 = Patient Name (family^given^...)
+                        //   P-8 = Birthdate
+                        //   P-9 = Sex
+                        // Resulting layout: [P][1][id][][][name][][birth][sex]
+                        astm.append("P|1|").append(patientId).append("|||").append(patientName).append("||")
                             .append(birthDate).append("|").append(sex).append("\r");
                         patientHeaderEmitted = true;
                     }
@@ -1049,10 +1143,14 @@ public class AnalyzerGeneXpert implements Analyzer {
                 }
             }
 
-            astm.append("L|1|F");
-
-            if (!hasAnyOrder) {
-                logger.info("convertRSP_K11toASTM: processed RSP^K11 but no mapped orders found; returning L|1|Y");
+            // L-3 termination code (section 6.3.1):
+            //   orders are provided -> F
+            //   no order available  -> I, with no P and no O record
+            if (hasAnyOrder) {
+                astm.append("L|1|F");
+            } else {
+                logger.info("convertRSP_K11toASTM: no usable order in the RSP^K11 - emitting L|1|I");
+                astm.append("L|1|I");
             }
 
             return astm.toString().split("\r");
@@ -1069,98 +1167,240 @@ public class AnalyzerGeneXpert implements Analyzer {
     // === Communication Management ===
     
     /**
-     * Sends an ASTM message (line by line) to the analyzer over the active socket.
+     * Sends an ASTM message to the instrument over the active socket.
+     * <p>
+     * The whole message is assembled first, then split into frames of at most {@link #MAX_FRAME_TEXT} bytes, per section 3.2.3.1:
+     * <pre>
+     *   intermediate frame : &lt;STX&gt; FN Text &lt;ETB&gt; C1 C2 &lt;CR&gt; &lt;LF&gt;
+     *   end frame          : &lt;STX&gt; FN Text &lt;ETX&gt; C1 C2 &lt;CR&gt; &lt;LF&gt;
+     * </pre>
+     * Every record inside Text is terminated by &lt;CR&gt;.
+     * <p>
+     * A rejected frame is re-sent up to {@link #MAX_FRAME_ATTEMPTS} times before the message is aborted
+     * (section 3.2.5.1). Every abort path goes through the Termination Phase.
      *
-     * Each line is framed using ASTM E1381 protocol (STX, frame number, payload,
-     * ETX, checksum, CR, LF).
-     *
-     * The sender waits for ACK or NAK after ENQ and after each frame.
-     *
-     * This implementation does not retry frame transmission after a NAK.
-     * On NAK or timeout, the transmission is aborted and an error status is returned.
-     *
-     * @param lines ASTM message split into lines (H|..., P|..., O|..., L|...)
-     * @return "ACK" if all frames were accepted, otherwise "NAK", "UNKNOWN", or "ERROR"
+     * @param lines ASTM records (H|..., P|..., O|..., L|...)
+     * @return "ACK" if the whole message was accepted; otherwise "NAK",
+     *         "CONTENTION" (instrument has priority), "INTERRUPTED"
+     *         (instrument requested the sender to stop), "UNKNOWN" or "ERROR".
      */
     public String sendASTMMessage(String[] lines) {
+        // Section 3.2.3.1 defines a frame as a slice of at most 240 bytes of the MESSAGE TEXT, not as an ASTM record:
+        //   - every record inside the text is terminated by <CR>
+        //   - all frames but the last one end with <ETB>
+        //   - only the last one ends with <ETX>
+        // The worked example of section 3.2.7 shows frame boundaries falling in the middle of a record.
+        //
+        // Checksum: sum of frame number, text and terminator, modulo 256.
         try {
-            logger.info(">>> Sending ENQ");
-            outputStream.write(ENQ);
-            outputStream.flush();
+            // STEP 1: Rebuild the message text. Every record is CR-terminated
+            //    (section 3.2.3.1).
+            StringBuilder messageText = new StringBuilder();
+            for (String line : lines) {
+                if (line == null || line.isEmpty()) {
+                    continue;
+                }
+                messageText.append(line).append((char) CR);
+            }
 
-            socket.setSoTimeout(10000);
-            int response;
-            try {
-                socket.setSoTimeout(10000);
-                response = inputStream.read();
-            } catch (SocketTimeoutException e) {
-                logger.warn("Timeout waiting for ACK after ENQ (10s)");
+            byte[] textBytes = messageText.toString().getBytes(StandardCharsets.US_ASCII);
+            if (textBytes.length == 0) {
+                logger.warn("sendASTMMessage: empty message, nothing to send");
                 return "ERROR";
             }
-            
-            if (response == ACK) {
-                logger.info("<<< Response: ACK");
-            } else if (response == NAK) {
-                logger.warn("<<< Response: NAK");
-                return "NAK";
-            } else {
-                logger.warn("<<< Response: Unexpected byte: " + response);
-                return "UNKNOWN";
+
+            // STEP 2: Establishment Phase (section 3.2.2).
+            String establish = establishLink();
+            if (!"ACK".equals(establish)) {
+                return establish;
             }
 
-            for (int i = 0; i < lines.length; i++) {
-            	// ASTM E1381: frame number cycles from 0 to 7
-                String body = ((i + 1) % 8) + lines[i];
-                byte[] bodyBytes = body.getBytes(StandardCharsets.US_ASCII);
-                ByteArrayOutputStream frame = new ByteArrayOutputStream();
-                frame.write(STX);
-                frame.write(bodyBytes);
-                frame.write(ETX);
+            // STEP 3: Transfer Phase, split into MAX_FRAME_TEXT slices.
+            //    Section 3.2.3.1: numbering starts at 1, increments by one per
+            //    frame, and wraps back to 0 after 7.
+            int frameNo = 1;
+            int frameCount = (textBytes.length + MAX_FRAME_TEXT - 1) / MAX_FRAME_TEXT;
+            logger.info(">>> Sending {} bytes in {} frame(s)", textBytes.length, frameCount);
 
-                int checksum = 0;
-                for (byte b : bodyBytes) checksum += (b & 0xFF);
-                checksum += ETX;
-                checksum &= 0xFF;
-                String checksumStr = String.format("%02X", checksum);
+            for (int offset = 0; offset < textBytes.length; offset += MAX_FRAME_TEXT) {
+                int len = Math.min(MAX_FRAME_TEXT, textBytes.length - offset);
+                boolean isLast = (offset + len) >= textBytes.length;
+                byte terminator = isLast ? ETX : ETB;
 
-                frame.write(checksumStr.getBytes(StandardCharsets.US_ASCII));
-                frame.write(CR);
-                frame.write(LF);
-
-                logger.info(">>> Sending frame " + (i + 1) + ": " + lines[i]);
-                outputStream.write(frame.toByteArray());
-                outputStream.flush();
-
-                socket.setSoTimeout(10000);
-                int frameResp;
-                try {
-                    socket.setSoTimeout(10000);
-                    frameResp = inputStream.read();
-                } catch (SocketTimeoutException e) {
-                    logger.warn("Timeout waiting for ACK after frame " + (i + 1) + " (10s)");
-                    return "ERROR";
+                String status = sendFrame(frameNo, textBytes, offset, len, terminator);
+                if (!"ACK".equals(status)) {
+                    // Section 3.2.5.1: any aborted message must go through the
+                    // Termination Phase to return the link to Neutral State.
+                    terminateLink();
+                    return status;
                 }
-                
-                if (frameResp == ACK) {
-                    logger.info("<<< Response: ACK");
-                } else if (frameResp == NAK) {
-                    logger.warn("<<< Response: NAK");
-                    return "NAK";
-                } else {
-                    logger.warn("<<< Response: Unexpected byte: " + frameResp);
-                    return "UNKNOWN";
-                }
+                frameNo = (frameNo + 1) % 8;
             }
 
-            logger.info(">>> Sending EOT");
-            outputStream.write(EOT);
-            outputStream.flush();
-
+            // STEP 4: Termination Phase (section 3.2.4).
+            terminateLink();
             return "ACK";
 
         } catch (IOException e) {
             logger.error("ASTM send error: " + e.getMessage());
             return "ERROR";
+        }
+    }
+
+    /**
+     * Establishment Phase (section 3.2.2).
+     * <p>
+     * Waits {@link #REPLY_TIMEOUT_MS} for the instrument to answer the ENQ. On NAK, waits at least 10 s and sends a
+     * new ENQ (section 3.2.2.1). An ENQ received in reply to an ENQ signals contention (section 3.2.2.2): the
+     * instrument has priority, the host must stop transmitting and prepare to receive.
+     *
+     * @return "ACK" once the link is established, otherwise a failure label.
+     * @throws IOException on network error.
+     */
+    private String establishLink() throws IOException {
+        for (int attempt = 1; attempt <= ENQ_MAX_ATTEMPTS; attempt++) {
+            logger.info(">>> Sending ENQ (attempt {}/{})", attempt, ENQ_MAX_ATTEMPTS);
+            outputStream.write(ENQ);
+            outputStream.flush();
+
+            int response;
+            try {
+                socket.setSoTimeout(REPLY_TIMEOUT_MS);
+                response = inputStream.read();
+            } catch (SocketTimeoutException e) {
+                logger.warn("No reply to ENQ within {} ms - entering Termination Phase", REPLY_TIMEOUT_MS);
+                terminateLink();
+                return "ERROR";
+            }
+
+            if (response == ACK) {
+                logger.info("<<< ACK - link established");
+                return "ACK";
+            }
+
+            if (response == NAK) {
+                logger.warn("<<< NAK on ENQ - instrument not ready, retrying in {} ms", ENQ_RETRY_DELAY_MS);
+                sleepQuietly(ENQ_RETRY_DELAY_MS);
+                continue;
+            }
+
+            if (response == ENQ) {
+                // Section 3.2.2.2: the instrument has priority. The host gives
+                // up sending and goes back to listening; the receive loop will
+                // handle the inbound message.
+                logger.warn("<<< ENQ in reply to ENQ - contention, instrument has priority");
+                return "CONTENTION";
+            }
+
+            logger.warn("<<< Unexpected byte in reply to ENQ: {}", response);
+            terminateLink();
+            return "UNKNOWN";
+        }
+
+        logger.error("Link establishment abandoned after {} attempts", ENQ_MAX_ATTEMPTS);
+        return "NAK";
+    }
+
+    /**
+     * Sends one frame and handles its retransmission (section 3.2.5.1).
+     * <p>
+     * A rejected frame is re-sent with the same frame number, and the transfer is aborted only
+     * after {@link #MAX_FRAME_ATTEMPTS} consecutive rejections.
+     * <p>
+     * An EOT received in reply is a positive acknowledgment carrying an interrupt request (section 3.2.3.1,
+     * "Receiver Interrupts"): the frame is accepted, but the instrument asks the sender to stop.
+     *
+     * @param frameNo    frame number (0-7).
+     * @param text       full message text.
+     * @param offset     start of the slice within {@code text}.
+     * @param len        slice length.
+     * @param terminator {@code ETB} (intermediate frame) or {@code ETX} (end frame).
+     * @return "ACK" if the frame was accepted, otherwise a failure label.
+     * @throws IOException on network error.
+     */
+    private String sendFrame(int frameNo, byte[] text, int offset, int len, byte terminator)
+            throws IOException {
+
+        for (int attempt = 1; attempt <= MAX_FRAME_ATTEMPTS; attempt++) {
+            ByteArrayOutputStream frame = new ByteArrayOutputStream();
+            int frameDigit = '0' + frameNo;
+
+            frame.write(STX);
+            frame.write(frameDigit);
+            frame.write(text, offset, len);
+            frame.write(terminator);
+
+            // Checksum: frame number + text + terminator, modulo 256
+            // (section 3.2.3.1). STX, the checksum characters and the trailing
+            // CR/LF are excluded.
+            int checksum = frameDigit;
+            for (int i = offset; i < offset + len; i++) {
+                checksum += (text[i] & 0xFF);
+            }
+            checksum += (terminator & 0xFF);
+            checksum &= 0xFF;
+
+            frame.write(String.format("%02X", checksum).getBytes(StandardCharsets.US_ASCII));
+            frame.write(CR);
+            frame.write(LF);
+
+            logger.info(">>> Frame {} ({} bytes, {}) attempt {}/{}",
+                        frameNo, len, (terminator == ETX ? "ETX" : "ETB"), attempt, MAX_FRAME_ATTEMPTS);
+            outputStream.write(frame.toByteArray());
+            outputStream.flush();
+
+            int reply;
+            try {
+                socket.setSoTimeout(REPLY_TIMEOUT_MS);
+                reply = inputStream.read();
+            } catch (SocketTimeoutException e) {
+                logger.warn("No reply to frame {} within {} ms - aborting message",
+                            frameNo, REPLY_TIMEOUT_MS);
+                return "ERROR";
+            }
+
+            if (reply == ACK) {
+                return "ACK";
+            }
+
+            if (reply == EOT) {
+                logger.info("<<< EOT - frame accepted, instrument requests the sender to stop");
+                return "INTERRUPTED";
+            }
+
+            if (reply == NAK) {
+                logger.warn("<<< NAK on frame {} - retransmitting", frameNo);
+            } else {
+                logger.warn("<<< Unexpected byte after frame {}: {} - retransmitting", frameNo, reply);
+            }
+            // Section 3.2.5.1: any byte other than ACK or EOT counts as a
+            // rejection and increments the retransmission counter.
+        }
+
+        logger.error("Frame {} rejected {} times - aborting message", frameNo, MAX_FRAME_ATTEMPTS);
+        return "NAK";
+    }
+
+    /**
+     * Termination Phase (section 3.2.4). Sends EOT to return the link to the Neutral State, where either side may
+     * take the initiative again. Called from every abort path so that the link is never left taken.
+     *
+     * @throws IOException on network error.
+     */
+    private void terminateLink() throws IOException {
+        logger.info(">>> Sending EOT");
+        outputStream.write(EOT);
+        outputStream.flush();
+    }
+
+    /**
+     * Sleeps without propagating the interruption as an exception, for the delays mandated by the specification.
+     */
+    private void sleepQuietly(int millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
         }
     }
     
@@ -1363,8 +1603,14 @@ public class AnalyzerGeneXpert implements Analyzer {
     	// Loop while the socket is alive; per-connection FSM
         while (socket != null && !socket.isClosed()) {
             try {
-                // STEP 1: Wait for ENQ (15s)
-                socket.setSoTimeout(15000);
+                // STEP 1: Wait for ENQ
+                // Section 3.2.5.2 grants the receiver 30 s before the link is considered back in the Neutral State.
+                socket.setSoTimeout(RECEIVE_TIMEOUT_MS);
+
+                // Frame numbering restarts at 1 for each transfer (section 3.2.3.1), so the sequence
+                // check is reset at every Establishment Phase.
+                this.lastAcceptedFrameNo = -1;
+
                 int firstByte = inputStream.read();
                 if (firstByte == -1) {
                     logger.info("Stream closed by peer during ENQ wait. Exiting listener.");
@@ -1446,10 +1692,36 @@ public class AnalyzerGeneXpert implements Analyzer {
                         outputStream.flush();
                         // Wait for retransmission of the same frame; do not append to assembly
                         continue;
-                    } else {
-                        outputStream.write(ACK);
-                        outputStream.flush();
                     }
+
+                    // Frame number check (section 3.2.5.1). A frame is accepted only when it carries the number of
+                    // the last accepted frame (a retransmission after a NAK) or the next one modulo 8.
+                    //
+                    // A retransmission is acknowledged but not appended again, otherwise the reassembled message
+                    // would silently contain a duplicated fragment.
+                    int frameDigit = frameNo - '0';
+                    boolean isRetransmission = (frameDigit == this.lastAcceptedFrameNo);
+                    boolean isNext = (this.lastAcceptedFrameNo < 0)
+                                   || (frameDigit == ((this.lastAcceptedFrameNo + 1) % 8));
+
+                    if (!isRetransmission && !isNext) {
+                        logger.warn("Out-of-sequence frame number: got {}, last accepted {} - NAK",
+                                    frameDigit, this.lastAcceptedFrameNo);
+                        outputStream.write(NAK);
+                        outputStream.flush();
+                        continue;
+                    }
+
+                    outputStream.write(ACK);
+                    outputStream.flush();
+
+                    if (isRetransmission) {
+                        logger.info("Frame {} already accepted - retransmission acknowledged, not reassembled",
+                                    frameDigit);
+                        continue;
+                    }
+
+                    this.lastAcceptedFrameNo = frameDigit;
 
                     // STEP 3.8: Append frame payload into the assembled message (NO extra delimiter here)
                     // The payload already contains CR between ASTM records; frames can split a record arbitrarily.
@@ -1487,8 +1759,9 @@ public class AnalyzerGeneXpert implements Analyzer {
                 }
 
             } catch (SocketTimeoutException timeoutEx) {
-                // STEP 6: No byte received in the window — keep waiting
-                logger.warn("No data received within 15000 ms — continuing to wait...");
+                // STEP 6: No byte received in the window - keep waiting
+                // (RECEIVE_TIMEOUT_MS, section 3.2.5.2).
+                logger.warn("No data received within {} ms - continuing to wait...", RECEIVE_TIMEOUT_MS);
                 continue;
 
             } catch (IOException ioEx) {
@@ -1811,6 +2084,9 @@ public class AnalyzerGeneXpert implements Analyzer {
             }
         }
 
-        return "H|\\^&|||INST^GeneXpert^4.7||||||P|1394-97|" + now;
+        // Fallback header, used when no usable H| record was found above. GeneXpert declares its own delimiters,
+        // "@^\\" rather than the standard ASTM E1394 "\\^&" (sections 3.2.7 and 6.3):
+        //     H|@^\\|<id>||GeneXpert PC^GeneXpert^6.1|||||LIS||P|1394-97|<date>
+        return "H|@^\\|||INST^GeneXpert^4.7||||||P|1394-97|" + now;
     }
 }

@@ -18,7 +18,8 @@ Do not deploy the bundle as a single directory.
 
 ## Communication protocols
 
-- Analyzer ↔ LabBook Connect: ASTM E1381 over TCP socket
+- Analyzer ↔ LabBook Connect: ASTM E1381 over TCP socket, as specified in the
+  GeneXpert LIS Interface Protocol Specification, 302-2261 Rev. F (2023-06)
 - LabBook Connect ↔ LIS: HL7 v2.5.1 (HTTP)
 
 ## Supported transactions
@@ -89,6 +90,36 @@ to be received without being correctly matched or displayed.
 
 - Logs use the global LabBook Connect logging configuration.
 - Low-level ASTM traffic (ENQ, ACK, frames) is logged for diagnostic purposes.
+
+## Testing without an instrument
+
+`script/simulate_genexpert.py` plays the part of the instrument. It connects to the plugin the way a
+GeneXpert does, speaks ASTM E1381 in both directions, and reports what the plugin answered.
+
+```bash
+python3 script/simulate_genexpert.py --host <connect host> --port <analyzer port> \
+        --scenario query-specimen --specimen SAMP-027
+```
+
+The port is the one set in the analyzer settings file, not a fixed value.
+
+| Scenario | What the instrument asks | What it checks |
+|---|---|---|
+| `query-specimen` | order for one specimen | specimen extraction, mapping of the test code |
+| `query-patient-specimen` | same order, with the patient identifier in front | that the patient part is ignored |
+| `query-all` | every pending order | multi-frame splitting, and that only tests known to the mapping are returned |
+| `cancel` | cancellation of the previous query | that nothing is sent back |
+| `results` | a Xpert Carba-R result upload | the five targets reach the LIS |
+
+The script also checks the reply and warns when something does not follow the specification: orders
+announced when none were sent, header delimiters that are not the ones GeneXpert uses, frame numbers
+out of order, wrong checksums.
+
+Two options help during troubleshooting. `--nak-frame N` rejects frame N once, so that the plugin has
+to send it again. `--verbose` prints the raw bytes.
+
+The `results` scenario is written for the Xpert Carba-R. Testing another analysis means editing the
+codes and values at the top of the script.
 
 ## Message archiving
 

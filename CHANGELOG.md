@@ -3,6 +3,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.0.15] - 2026-09-09
+### Fixed
+- ASTM frames are now 240-byte slices of the message text, ending with ETB or ETX, with a CR after each record, as required by specification 302-2261 Rev. F.
+- A query cancellation (Q-13 = A) is no longer read as a request for every pending order.
+- Frames received out of sequence are rejected, and a frame sent again is no longer added twice to the message being assembled.
+- P record field positions follow section 6.4.2. Patient name, birthdate and sex were shifted one position to the left.
+- The L record carries the I termination code when no order is available, instead of announcing orders in an empty reply.
+- The fallback header declares the delimiters used by GeneXpert, @^\ instead of the standard ASTM E1394 \^&.
+- The specimen identifier is read from component 2 of the composite Q-3 field.
+
+### Changed
+- A rejected frame is sent again up to six times before the transfer is stopped, instead of stopping at the first NAK.
+- Reply and reception timeouts follow section 3.2.5.2, 15 s and 30 s.
+- Every path that stops a transfer now goes through the Termination Phase, so the link is never left busy.
+
 ## [1.0.14] - 2026-07-01
 ### Changed
 - Generate a unique ASTM message ID for each reply instead of reusing the incoming message ID.
