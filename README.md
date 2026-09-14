@@ -16,6 +16,14 @@ The analyzer setting file is a sample and MUST be edited before use
 
 Do not deploy the bundle as a single directory.
 
+## Compatible models
+
+| Models | Transactions |
+|---|---|
+| GeneXpert (Cepheid) | query, orders and results |
+
+Based on the host interface specification 302-2261 Rev. F, validated on an Xpert Carba-R.
+
 ## Communication protocols
 
 - Analyzer ↔ LabBook Connect: ASTM E1381 over TCP socket, as specified in the
@@ -78,18 +86,27 @@ Notes:
 - Only tests explicitly listed are supported.
 - Additional tests and result mappings must be added as needed.
 
-## GeneXpert limitation
-
-The test code sent to GeneXpert (Host Test Code / ASTM O segment, field O|...^^^CODE)
-MUST be 15 characters or less.
-
-Longer codes may be accepted by LabBook but cause GeneXpert results
-to be received without being correctly matched or displayed.
-
 ## Logging
 
 - Logs use the global LabBook Connect logging configuration.
 - Low-level ASTM traffic (ENQ, ACK, frames) is logged for diagnostic purposes.
+
+## Message archiving
+
+Message archiving is controlled by the `archive_msg` setting in the analyzer configuration file.
+
+When enabled (`archive_msg = "Y"`), raw messages are archived on disk for traceability and diagnostics.
+
+Archived messages are stored per analyzer instance in:
+    /storage/resource/connect/analyzer/{id_analyzer}/
+
+Subdirectories:
+- archive_lab27 (LAB-27 queries)
+- archive_lab28 (LAB-28 orders)
+- archive_lab29 (LAB-29 results)
+
+Messages are saved as plain text files.
+Filenames include the transaction type, message source (Analyzer or LIS), and a timestamp.
 
 ## Testing without an instrument
 
@@ -121,25 +138,10 @@ to send it again. `--verbose` prints the raw bytes.
 The `results` scenario is written for the Xpert Carba-R. Testing another analysis means editing the
 codes and values at the top of the script.
 
-## Message archiving
-
-Message archiving is controlled by the `archive_msg` setting in the analyzer configuration file.
-
-When enabled (`archive_msg = "Y"`), raw messages are archived on disk for traceability and diagnostics.
-
-Archived messages are stored per analyzer instance in:
-    /storage/resource/connect/analyzer/{id_analyzer}/
-
-Subdirectories:
-- archive_lab27 (LAB-27 queries)
-- archive_lab28 (LAB-28 orders)
-- archive_lab29 (LAB-29 results)
-
-Messages are saved as plain text files.
-Filenames include the transaction type, message source (Analyzer or LIS), and a timestamp.
-
 ## Limitations
 
+- The test code sent to the analyzer, in the ASTM O segment, must be 15 characters or less.
+  A longer code is accepted by LabBook but its results come back without being matched.
 - No automatic frame retransmission on ASTM NAK (send side).
 - Client mode is experimental.
 - RSP^K11 responses always terminate with L|1|N.

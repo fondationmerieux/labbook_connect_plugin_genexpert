@@ -3,6 +3,10 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.0.16] - 2026-09-14
+### Fixed
+- The patient code is written to both identifier fields of the P record, as the specification examples do.
+
 ## [1.0.15] - 2026-09-09
 ### Fixed
 - ASTM frames are now 240-byte slices of the message text, ending with ETB or ETX, with a CR after each record, as required by specification 302-2261 Rev. F.

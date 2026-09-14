@@ -44,16 +44,25 @@ import ca.uhn.hl7v2.model.v251.segment.SPM;
 import ca.uhn.hl7v2.model.v251.message.ACK;
 
 /**
- * Implementation of the Analyzer interface specific for GeneXpert analyzers.
- * <p>
- * This class provides the functionalities needed to communicate with GeneXpert analyzers 
- * using ASTM protocol, handling LAB-27, LAB-28, and LAB-29 transactions.
+ * GeneXpert analyzer plugin implementation for LabBook Connect.
+ *
+ * This class implements bidirectional ASTM communication over TCP sockets, with the E1381
+ * link layer: ENQ/ACK/NAK, STX frames, checksum, EOT.
+ *
+ * Supported IHE LAB flows:
+ * - LAB-27: analyzer query (ASTM Q record) -> QBP^Q11 -> RSP^K11 -> ASTM P and O records.
+ * - LAB-28: orders (OML^O33) received from LIS, sent as ASTM records, acknowledged by ACK^R22.
+ * - LAB-29: analyzer results (ASTM R records) -> OUL^R22 -> forwarded to LIS.
+ *
+ * Reference document: GeneXpert LIS Interface Protocol Specification, 302-2261 Rev. F (2023-06).
+ *
+ * The plugin supports both client and server socket modes.
  */
 public class AnalyzerGeneXpert implements Analyzer {
 	
 	private static final Logger logger = LoggerFactory.getLogger(AnalyzerGeneXpert.class); // Uses Connect's logback.xml
 	
-	private final String jar_version = "1.0.15";
+	private final String jar_version = "1.0.16";
 
     // === General Configuration ===
     protected String version = "";
@@ -1116,10 +1125,11 @@ public class AnalyzerGeneXpert implements Analyzer {
                         //   P-3 = Patient ID 2 (practice-assigned identifier)
                         //   P-5 = Patient ID 1 (patient identification)
                         //   P-6 = Patient Name (family^given^...)
-                        //   P-8 = Birthdate
-                        //   P-9 = Sex
-                        // Resulting layout: [P][1][id][][][name][][birth][sex]
-                        astm.append("P|1|").append(patientId).append("|||").append(patientName).append("||")
+                        // The LIS holds a single patient code, written to both identifier fields
+                        // because the specification examples always carry the two.
+                        // Resulting layout: [P][1][id][][id][name][][birth][sex]
+                        astm.append("P|1|").append(patientId).append("||").append(patientId).append("|")
+                            .append(patientName).append("||")
                             .append(birthDate).append("|").append(sex).append("\r");
                         patientHeaderEmitted = true;
                     }
