@@ -3,6 +3,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.0.17] - 2026-09-22
+### Fixed
+- Reloading the analyzers from LabBook no longer kills the listener thread, the analyzer
+  stayed unreachable until Connect was restarted
+### Changed
+- Stopping the listener on purpose is no longer logged as an error
+- The listener now waits for a connection in two-second slices instead of blocking, the
+  same way the HL7 plugins do
+- A port still busy at startup is tried again every ten seconds instead of giving up
+- A second call to listenDevice() is ignored while the listener is already running
+
 ## [1.0.16] - 2026-09-14
 ### Fixed
 - The patient code is written to both identifier fields of the P record, as the specification examples do.
@@ -76,7 +87,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [1.0.1] - 2026-02-12
 ### Fixed
-- LAB-27: return `L|1|Y` on successful RSP^K11 processing; `L|1|N` only on technical error.
+- LAB-27: return `L|1|Y` on successful RSP^K11 processing, `L|1|N` only on technical error.
 
 ## [1.0.0] - 2026-02-02
 ### Changed

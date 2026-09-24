@@ -1,7 +1,7 @@
 # GeneXpert – LabBook Connect plugin
 
 This plugin enables communication between a Cepheid GeneXpert analyzer and LabBook.
-The analyzer communicates using ASTM only; HL7 is used exclusively toward the LIS.
+The analyzer communicates using ASTM only, HL7 being used toward the LIS alone.
 
 ## Installation note
 

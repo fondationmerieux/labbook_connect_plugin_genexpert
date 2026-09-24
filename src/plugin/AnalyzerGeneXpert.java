@@ -62,7 +62,7 @@ public class AnalyzerGeneXpert implements Analyzer {
 	
 	private static final Logger logger = LoggerFactory.getLogger(AnalyzerGeneXpert.class); // Uses Connect's logback.xml
 	
-	private final String jar_version = "1.0.16";
+	private final String jar_version = "1.0.17";
 
     // === General Configuration ===
     protected String version = "";
@@ -1446,6 +1446,11 @@ public class AnalyzerGeneXpert implements Analyzer {
     	
     	this.mappingToml = Connect_util.loadMappingToml(this.getMappingPath());
 
+    	if (this.listening.get()) {
+    		logger.info("DEBUG: listenDevice() already running, ignoring call");
+    		return;
+    	}
+
     	if (!"socket_E1381".equalsIgnoreCase(this.type_cnx) && !"socket".equalsIgnoreCase(this.type_cnx)) {
     		logger.info("Unsupported connection type: " + type_cnx);
     		this.listening.set(false);
@@ -1531,44 +1536,70 @@ public class AnalyzerGeneXpert implements Analyzer {
      */
     private void startASTMServer() {
     	this.listening.set(true);
+
         while (this.listening.get()) {
             try {
-            	this.serverSocket = new ServerSocket(this.port_analyzer);
-                logger.info("ASTM Server started on port {}", this.port_analyzer);
-
-                while (true) {
-                    try (Socket clientSocket = serverSocket.accept()) {
-                        logger.info("Accepted connection from {}", clientSocket.getInetAddress());
-                        this.socket = clientSocket;
-                        this.inputStream = clientSocket.getInputStream();
-                        this.outputStream = clientSocket.getOutputStream();
-                        listenForIncomingMessages();
-                    } catch (IOException ioEx) {
-                        logger.error("ERROR: Client handling failed: {}", ioEx.getMessage(), ioEx);
-                    } finally {
-                        this.socket = null; 
-                        this.inputStream = null; 
-                        this.outputStream = null;                        
-                        logger.info("Client connection closed.");
-                    }
+                // The server socket is kept open across connections, only (re)created when needed
+                if (this.serverSocket == null || this.serverSocket.isClosed()) {
+                    ServerSocket ss = new ServerSocket();
+                    ss.setReuseAddress(true);
+                    ss.setSoTimeout(2000);
+                    ss.bind(new java.net.InetSocketAddress(this.port_analyzer));
+                    this.serverSocket = ss;
+                    logger.info("ASTM Server started on port {}", this.port_analyzer);
                 }
-            } catch (IOException startEx) {
-                this.listening.set(false);
-                try { if (this.socket != null) this.socket.close(); } catch (IOException ignore) {}
-                this.socket = null;
-                logger.error("ERROR: Failed to start ASTM server on port {}: {}", this.port_analyzer, startEx.getMessage());
-                break;
-            } finally {
+
+                // Local reference, stopListening() may set serverSocket to null at any time
+                ServerSocket srv = this.serverSocket;
+
+                if (srv == null) break;
+
+                Socket clientSocket;
                 try {
-                    if (this.serverSocket != null && !this.serverSocket.isClosed()) {
-                        this.serverSocket.close();
-                    }
-                } catch (IOException e) {
-                    logger.warn("Error while closing serverSocket in finally: " + e.getMessage(), e);
+                    clientSocket = srv.accept();
+                } catch (SocketTimeoutException e) {
+                    continue; // no client yet, check the listening flag again
+                }
+
+                logger.info("Accepted connection from {}", clientSocket.getInetAddress());
+
+                try {
+                    this.socket = clientSocket;
+                    this.inputStream = clientSocket.getInputStream();
+                    this.outputStream = clientSocket.getOutputStream();
+                    listenForIncomingMessages();
                 } finally {
-                    this.serverSocket = null;
+                    try { if (!clientSocket.isClosed()) clientSocket.close(); } catch (IOException ignore) {}
+                    this.socket = null;
+                    this.inputStream = null;
+                    this.outputStream = null;
+                    logger.info("Client connection closed.");
+                }
+
+            } catch (IOException e) {
+                String msg = (e.getMessage() == null) ? "" : e.getMessage();
+
+                // Normal case during reload/stop: the server socket is closed by stopListening()
+                if (!this.listening.get() || "Socket closed".equalsIgnoreCase(msg)) {
+                    logger.info("Listener stopped on port {}", this.port_analyzer);
+                    break;
+                }
+
+                logger.error("ERROR: Failed to start/accept ASTM server on port {}: {}", this.port_analyzer, msg);
+
+                try {
+                    Thread.sleep(10000);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    this.listening.set(false);
+                    break;
                 }
             }
+        }
+
+        if (this.serverSocket != null) {
+            try { this.serverSocket.close(); } catch (Exception ignore) {}
+            this.serverSocket = null;
         }
     }
     
@@ -1623,9 +1654,8 @@ public class AnalyzerGeneXpert implements Analyzer {
 
                 int firstByte = inputStream.read();
                 if (firstByte == -1) {
-                    logger.info("Stream closed by peer during ENQ wait. Exiting listener.");
-                    this.listening.set(false);
-                    break;
+                    logger.info("Stream closed by peer during ENQ wait. Ending current connection listener.");
+                    break; // end this connection, the server loop will accept a new one
                 }
                 logger.info("<<< DEBUG BYTE 0x{} ({})", String.format("%02X", firstByte), printable(firstByte));
                 if (firstByte != ENQ) {
@@ -1775,9 +1805,9 @@ public class AnalyzerGeneXpert implements Analyzer {
                 continue;
 
             } catch (IOException ioEx) {
-                // STEP 7: Fatal I/O — stop listening on this socket
-            	this.listening.set(false);
+                // STEP 7: Fatal I/O - stop handling this client, the server loop accepts a new one
                 logger.error("Exception in listenForIncomingMessages (ASTM): {}", ioEx.getMessage(), ioEx);
+                break;
             }
         }
     }
