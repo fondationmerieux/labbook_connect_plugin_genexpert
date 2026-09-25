@@ -6,7 +6,7 @@ version = "1.0.1"  # Configuration file version
 [analyzer]
 brand = "GENEXPERT"                   			# Analyzer brand
 name = "GeneXpert"                    	 		# Analyzer model name
-id = "GX1"                     			# Unique analyzer identifier
+id = "XXX"                     			# Unique analyzer identifier
 plugin = "AnalyzerGeneXpert"             	# Plugin Java class name for this analyzer
 url_lis = "http://localhost/sigl"	# URL of the Laboratory Information System (LIS) upstream endpoint
 operation_mode = "batch"          			# Operation mode (batch or query)
@@ -17,5 +17,5 @@ mapping = "/storage/resource/connect/analyzer/mapping/mapping_genexpert.toml"  #
 
 [analyzer.socket]
 mode = "server"                   # Socket mode (client or server)
-ip = "192.168.1.52"        # Analyzer IP address
-port = 12301       # Port number for socket communication
+ip = "X.X.X.X"        # Analyzer IP address
+port = XXXXX       # Port number for socket communication
