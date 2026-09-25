@@ -1,0 +1,78 @@
+[livd_publication]
+publisher = "AEGLE (local mapping)"
+document_identifier = "cepheid_genexpert"
+publication_version_id = "1.0"
+publication_date = "2025-12-21"
+
+[equipment]
+manufacturer = "Cepheid"
+model = "GeneXpert 6.2"
+
+# -----------------------------
+# Tests (analysis) mapping
+# -----------------------------
+[[ivd_test]]
+name = "hbv_viral_load"
+vendor_test_code = "HBV"
+lis_test_code = "GX02"
+
+[[ivd_test]]
+name = "xpert_mtb_rif_ultra_v4"
+vendor_test_code = "MTB"
+lis_test_code = "GX06"
+
+# -----------------------------
+# Result (variable) mapping
+# -----------------------------
+
+# HBV Viral Load
+[[ivd_mapping]]
+test = "hbv_viral_load"
+vendor_result_code = "HBV_VL_IUML"
+lis_result_code = "HBV_VL"
+vendor_unit = "IU/mL"
+lis_unit = "IU/mL"
+convert = "none"
+factor = 0
+
+[[ivd_mapping]]
+test = "hbv_viral_load"
+vendor_result_code = "HBV_VL_LOG"
+lis_result_code = "HBV_VL_LOG"
+vendor_unit = "log10 IU/mL"
+lis_unit = "log10 IU/mL"
+convert = "none"
+factor = 0
+
+# Xpert MTB-RIF Ultra v4
+# Requested mapping:
+# - R|1  => MTB
+# - R|20 => MTB_trace
+# - R|39 => RIF
+[[ivd_mapping]]
+test = "xpert_mtb_rif_ultra_v4"
+vendor_result_code = "R1"
+lis_result_code = "MTB"
+vendor_unit = ""
+lis_unit = ""
+convert = "none"
+factor = 0
+
+[[ivd_mapping]]
+test = "xpert_mtb_rif_ultra_v4"
+vendor_result_code = "R20"
+lis_result_code = "MTB_trace"
+vendor_unit = ""
+lis_unit = ""
+convert = "none"
+factor = 0
+
+[[ivd_mapping]]
+test = "xpert_mtb_rif_ultra_v4"
+vendor_result_code = "R39"
+lis_result_code = "RIF"
+vendor_unit = ""
+lis_unit = ""
+convert = "none"
+factor = 0
+
